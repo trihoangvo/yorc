@@ -15,9 +15,10 @@
 package hostspool
 
 import (
-	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateHostResourcesLabels(t *testing.T) {

@@ -17,6 +17,11 @@ package deployments
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
+	"strconv"
+	"strings"
+
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 	"github.com/ystia/yorc/v3/events"
@@ -25,10 +30,6 @@ import (
 	"github.com/ystia/yorc/v3/log"
 	"github.com/ystia/yorc/v3/tosca"
 	"gopkg.in/yaml.v2"
-	"path"
-	"regexp"
-	"strconv"
-	"strings"
 )
 
 // AttributeData represents the related attribute data

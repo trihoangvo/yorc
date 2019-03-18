@@ -15,8 +15,9 @@
 package sizeutil
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestConvertToGB(t *testing.T) {

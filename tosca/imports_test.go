@@ -15,10 +15,11 @@
 package tosca
 
 import (
+	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
-	"testing"
 )
 
 type ImportsMap map[string][]ImportDefinition

@@ -17,9 +17,10 @@ package slurm
 import (
 	"context"
 	"fmt"
-	"github.com/pkg/errors"
 	"path"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/ystia/yorc/v3/config"
 	"github.com/ystia/yorc/v3/events"

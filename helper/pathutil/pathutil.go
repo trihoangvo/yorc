@@ -15,9 +15,10 @@
 package pathutil
 
 import (
+	"os"
+
 	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
-	"os"
 )
 
 // IsValidPath checks if a string is a valid path. (~ is handled)

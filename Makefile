@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-GOTOOLS = github.com/abice/go-enum github.com/google/addlicense
+GOTOOLS = github.com/abice/go-enum github.com/google/addlicense golang.org/x/tools/cmd/goimports
 
 VETARGS?=-all -asmdecl -atomic -bool -buildtags -copylocks -methods \
          -nilfunc -printf -rangeloops -shift -structtags -unsafeptr
@@ -87,8 +87,8 @@ cover:
 	@go test -tags "testing $(BUILD_TAGS)"  -p 1 -cover $(COVERARGS) ./...  
 
 format:
-	@echo "--> Running go fmt"
-	@go fmt ./...
+	@echo "--> Running goimports"
+	@goimports -l -w .
 
 vet:
 	@echo "--> Running go tool vet $(VETARGS) ."
