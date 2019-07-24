@@ -16,6 +16,7 @@ package rest
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,16 +25,17 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/tasks"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/tasks"
 )
 
 func extractFile(f *zip.File, path string) {
@@ -52,6 +54,77 @@ func extractFile(f *zip.File, path string) {
 	if _, err := io.Copy(targetFile, fileReader); err != nil {
 		log.Panic(err)
 	}
+}
+
+// unzipArchiveGetTopology unzips an archive and return the path to its topology
+// yaml file
+func unzipArchiveGetTopology(workingDir, deploymentID string, r *http.Request) (string, *Error) {
+	var err error
+	var file *os.File
+
+	uploadPath := filepath.Join(workingDir, "deployments", deploymentID)
+
+	if err = os.MkdirAll(uploadPath, 0775); err != nil {
+		return "", newInternalServerError(err)
+	}
+
+	file, err = os.Create(fmt.Sprintf("%s/deployment.zip", uploadPath))
+	// check err
+	if err != nil {
+		return "", newInternalServerError(err)
+	}
+
+	_, err = io.Copy(file, r.Body)
+	if err != nil {
+		return "", newInternalServerError(err)
+	}
+	destDir := filepath.Join(uploadPath, "overlay")
+	if err = os.MkdirAll(destDir, 0775); err != nil {
+		return "", newInternalServerError(err)
+	}
+	zipReader, err := zip.OpenReader(file.Name())
+	if err != nil {
+		return "", newInternalServerError(err)
+	}
+	defer zipReader.Close()
+
+	// Iterate through the files in the archive,
+	// and extract them.
+	for _, f := range zipReader.File {
+		fPath := filepath.Join(destDir, f.Name)
+		if f.FileInfo().IsDir() {
+			// Ensure that we have full rights on directory to be able to extract files into them
+			if err = os.MkdirAll(fPath, f.Mode()|0700); err != nil {
+				return "", newInternalServerError(err)
+			}
+			continue
+		}
+		extractFile(f, fPath)
+	}
+
+	patterns := []struct {
+		pattern string
+	}{
+		{"*.yml"},
+		{"*.yaml"},
+	}
+	var yamlList []string
+	for _, pattern := range patterns {
+		var yamls []string
+		if yamls, err = filepath.Glob(filepath.Join(destDir, pattern.pattern)); err != nil {
+			return "", newInternalServerError(err)
+		}
+		yamlList = append(yamlList, yamls...)
+	}
+	if len(yamlList) != 1 {
+		err = fmt.Errorf(
+			"one and only one YAML (.yml or .yaml) file should be present at the root of archive for deployment %s",
+			deploymentID)
+		return "", newBadRequestError(err)
+	}
+
+	return yamlList[0], nil
+
 }
 
 func (s *Server) newDeploymentHandler(w http.ResponseWriter, r *http.Request) {
@@ -84,9 +157,7 @@ func (s *Server) newDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 			log.Panicf("%v", err)
 		}
 		if dExits {
-			mess := fmt.Sprintf("Deployment with id %q already exists", id)
-			log.Debugf("[ERROR]: %s", mess)
-			writeError(w, r, newConflictRequest(mess))
+			s.updateDeployment(w, r, id)
 			return
 		}
 		uid = id
@@ -95,67 +166,20 @@ func (s *Server) newDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Analyzing deployment %s\n", uid)
 
-	var err error
-	var file *os.File
-	uploadPath := filepath.Join(s.config.WorkingDirectory, "deployments", uid)
-	if err = os.MkdirAll(uploadPath, 0775); err != nil {
-		log.Panicf("%+v", err)
+	yamlFile, archiveErr := unzipArchiveGetTopology(s.config.WorkingDirectory, uid, r)
+	if archiveErr != nil {
+		log.Printf("Error analyzing archive for deployment %s\n", uid)
+		writeError(w, r, archiveErr)
+		return
 	}
 
-	file, err = os.Create(fmt.Sprintf("%s/deployment.zip", uploadPath))
-	// check err
+	ctx := context.Background()
+	err := deployments.CleanupPurgedDeployments(ctx, s.consulClient, s.config.PurgedDeploymentsEvictionTimeout, uid)
 	if err != nil {
-		log.Panicf("%+v", err)
+		log.Panicf("%v", err)
 	}
 
-	_, err = io.Copy(file, r.Body)
-	if err != nil {
-		log.Panicf("%+v", err)
-	}
-	destDir := filepath.Join(uploadPath, "overlay")
-	if err = os.MkdirAll(destDir, 0775); err != nil {
-		log.Panicf("%+v", err)
-	}
-	zipReader, err := zip.OpenReader(file.Name())
-	if err != nil {
-		log.Panicf("%+v", err)
-	}
-	defer zipReader.Close()
-
-	// Iterate through the files in the archive,
-	// and extract them.
-	// TODO: USe go routines to process files concurrently
-	for _, f := range zipReader.File {
-		fPath := filepath.Join(destDir, f.Name)
-		if f.FileInfo().IsDir() {
-			// Ensure that we have full rights on directory to be able to extract files into them
-			if err = os.MkdirAll(fPath, f.Mode()|0700); err != nil {
-				log.Panicf("%+v", err)
-			}
-			continue
-		}
-		extractFile(f, fPath)
-	}
-
-	patterns := []struct {
-		pattern string
-	}{
-		{"*.yml"},
-		{"*.yaml"},
-	}
-	var yamlList []string
-	for _, pattern := range patterns {
-		if yamls, err := filepath.Glob(filepath.Join(destDir, pattern.pattern)); err != nil {
-			log.Panicf("%+v", err)
-		} else {
-			yamlList = append(yamlList, yamls...)
-		}
-	}
-	if len(yamlList) != 1 {
-		log.Panic("One and only one YAML (.yml or .yaml) file should be present at the root of deployment archive")
-	}
-
-	if err := deployments.StoreDeploymentDefinition(r.Context(), s.consulClient.KV(), uid, yamlList[0]); err != nil {
+	if err := deployments.StoreDeploymentDefinition(r.Context(), s.consulClient.KV(), uid, yamlFile); err != nil {
 		log.Debugf("ERROR: %+v", err)
 		log.Panic(err)
 	}
@@ -190,8 +214,13 @@ func (s *Server) deleteDeploymentHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	purge, err := getBoolQueryParam(r, "purge")
+	if err != nil {
+		writeError(w, r, newBadRequestMessage("purge query parameter must be a boolean value"))
+		return
+	}
 	var taskType tasks.TaskType
-	if _, ok := r.URL.Query()["purge"]; ok {
+	if purge {
 		log.Debugf("A purge task on deployment:%s has been requested", id)
 		taskType = tasks.TaskTypePurge
 	} else {
@@ -211,11 +240,32 @@ func (s *Server) deleteDeploymentHandler(w http.ResponseWriter, r *http.Request)
 	data := map[string]string{
 		"workflowName": "uninstall",
 	}
+	// Default is not to stop on error for undeployment
+	stopOnError, err := getBoolQueryParam(r, "stopOnError")
+	if err != nil {
+		writeError(w, r, newBadRequestMessage("stopOnError query parameter must be a boolean value"))
+		return
+	}
+	data["continueOnError"] = strconv.FormatBool(!stopOnError)
 	if taskID, err := s.tasksCollector.RegisterTaskWithData(id, taskType, data); err != nil {
-		log.Debugln("register task err" + err.Error())
+		log.Debugf("register task has returned an err:%q", err.Error())
 		if ok, _ := tasks.IsAnotherLivingTaskAlreadyExistsError(err); ok {
 			log.Debugln("another task is living")
 			writeError(w, r, newBadRequestError(err))
+			return
+		}
+
+		// Inconsistent deployment: force purge enters in action
+		if ok := deployments.IsInconsistentDeploymentError(err); ok {
+			log.Debugf("inconsistent deployment with ID:%q. We force purge it.", id)
+			newTaskID, err := s.tasksCollector.RegisterTask(id, tasks.TaskTypeForcePurge)
+			if err != nil {
+				log.Printf("Failed to force purge deployment with ID:%q due to error:%+v", id, err)
+				writeError(w, r, newInternalServerError(err))
+				return
+			}
+			w.Header().Set("Location", fmt.Sprintf("/deployments/%s/tasks/%s", id, newTaskID))
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		log.Panic(err)

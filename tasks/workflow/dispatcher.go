@@ -25,10 +25,10 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/tasks"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/tasks"
 )
 
 const executionLockPrefix = ".processingLock-"
@@ -221,6 +221,18 @@ func (d *Dispatcher) Run() {
 				log.Debugf("Skipping Task Execution with status %q", status)
 				// Delete useless execution
 				d.deleteExecutionTree(execID)
+				lock.Unlock()
+				lock.Destroy()
+				continue
+			}
+
+			inProgress, err := tasks.IsStepRegistrationInProgress(kv, taskID)
+			if err != nil {
+				log.Printf("Can't check if task %s registration is in progress %+v", taskID, err)
+				continue
+			}
+			if inProgress {
+				log.Debugf("Task %s registration is still in progress", taskID, err)
 				lock.Unlock()
 				lock.Destroy()
 				continue

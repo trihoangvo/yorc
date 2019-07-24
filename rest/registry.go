@@ -17,7 +17,9 @@ package rest
 import (
 	"net/http"
 
-	"github.com/ystia/yorc/v3/registry"
+	"github.com/ystia/yorc/v4/deployments/store"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/registry"
 )
 
 var reg = registry.GetRegistry()
@@ -35,8 +37,12 @@ func (s *Server) listRegistryImplementationsHandler(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) listRegistryDefinitionsHandler(w http.ResponseWriter, r *http.Request) {
-	definitions := reg.ListToscaDefinitions()
-	definitionsCollection := RegistryDefinitionsCollection{Definitions: definitions}
+	defs, err := store.GetCommonsDefinitionsList()
+	if err != nil {
+		log.Panic(err)
+	}
+
+	definitionsCollection := RegistryDefinitionsCollection{Definitions: defs}
 	encodeJSONResponse(w, r, definitionsCollection)
 }
 

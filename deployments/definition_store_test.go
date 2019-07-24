@@ -16,17 +16,23 @@ package deployments
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
+	stdlog "log"
 	"path"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/consul/api"
+	ctu "github.com/hashicorp/consul/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/prov"
+	"github.com/ystia/yorc/v4/helper/collections"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/prov"
+	"github.com/ystia/yorc/v4/testutil"
 )
 
 func testDefinitionStore(t *testing.T, kv *api.KV) {
@@ -743,9 +749,31 @@ func testValueAssignments(t *testing.T, kv *api.KV) {
 			if got != nil && got.RawString() != tt.want {
 				t.Errorf("GetTopologyOutput() = %q, want %q", got.RawString(), tt.want)
 			}
+
+			checkTopologyOutputs(t, kv, deploymentID)
 		})
 	}
 
+}
+
+func checkTopologyOutputs(t *testing.T, kv *api.KV, deploymentID string) {
+	got, err := GetTopologyOutputsNames(kv, deploymentID)
+	if err != nil {
+		t.Errorf("GetTopologyOutputsNames() error = %v", err)
+		return
+	}
+	expectedResults := []string{"literal", "literalDefault", "complex", "complexDef", "baseComplex", "baseComplexDef", "node1Lit", "node2BaseComplexPropNestedSubComplexLiteral", "node2BaseComplexPropNestedSubComplexLiteral"}
+	if len(got) != len(expectedResults) {
+		t.Errorf("GetTopologyOutputsNames() expecting = %d results got %d", len(expectedResults), len(got))
+		return
+	}
+
+	for _, o := range expectedResults {
+		if !collections.ContainsString(got, o) {
+			t.Errorf("GetTopologyOutputsNames() output = %q missing", o)
+			return
+		}
+	}
 }
 
 func testIssueGetEmptyPropRel(t *testing.T, kv *api.KV) {
@@ -923,6 +951,25 @@ func testInlineWorkflow(t *testing.T, kv *api.KV) {
 	require.Equal(t, len(wfInception.Steps), 1)
 }
 
+func testDeleteWorkflow(t *testing.T, kv *api.KV) {
+	// t.Parallel()
+	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
+	err := StoreDeploymentDefinition(context.Background(), kv, deploymentID, "testdata/inline_workflow.yaml")
+	require.Nil(t, err)
+
+	workflows, err := GetWorkflows(kv, deploymentID)
+	require.Nil(t, err)
+	require.Equal(t, len(workflows), 3)
+
+	err = DeleteWorkflow(kv, deploymentID, "install")
+	require.NoError(t, err, "Unexpected error deleting install workflow")
+
+	wfInstall, err := ReadWorkflow(kv, deploymentID, "install")
+	require.NoError(t, err, "Unexpected error reading a non-existing workflow")
+	assert.Equal(t, len(wfInstall.Steps), 0, "Expected no step in non-existing workflow")
+
+}
+
 func testCheckCycleInNestedWorkflows(t *testing.T, kv *api.KV) {
 	// t.Parallel()
 	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
@@ -932,13 +979,8 @@ func testCheckCycleInNestedWorkflows(t *testing.T, kv *api.KV) {
 
 // Testing a Deployment Definition where one of the imports
 // contains a topology template
-func testImportTopologyTemplate(t *testing.T, kv *api.KV) {
+func testImportTopologyTemplate(t *testing.T, kv *api.KV, deploymentID string) {
 	// t.Parallel()
-
-	// Storing the Deployment definition
-	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
-	err := StoreDeploymentDefinition(context.Background(), kv, deploymentID, "testdata/test_topology.yml")
-	require.NoError(t, err, "Failed to store test topology deployment definition")
 
 	// Check the stored compute node and network have the expected type
 	expectedKeyValuePairs := map[string]string{
@@ -957,13 +999,8 @@ func testImportTopologyTemplate(t *testing.T, kv *api.KV) {
 }
 
 // Testing topology template metadata
-func testTopologyTemplateMetadata(t *testing.T, kv *api.KV) {
+func testTopologyTemplateMetadata(t *testing.T, kv *api.KV, deploymentID string) {
 	t.Parallel()
-
-	// Storing the Deployment definition
-	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
-	err := StoreDeploymentDefinition(context.Background(), kv, deploymentID, "testdata/test_topology.yml")
-	require.NoError(t, err, "Failed to store test topology deployment definition")
 
 	// Check the stored template metadata
 	// This topology template imports a tempologuy template with metatadata
@@ -1024,14 +1061,9 @@ func testRunnableWorkflowsAutoCancel(t *testing.T, kv *api.KV) {
 }
 
 // Testing topology template metadata
-func testAttributeNotifications(t *testing.T, kv *api.KV) {
+func testAttributeNotifications(t *testing.T, kv *api.KV, deploymentID string) {
 	t.Parallel()
 	log.SetDebug(true)
-
-	// Storing the Deployment definition
-	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
-	err := StoreDeploymentDefinition(context.Background(), kv, deploymentID, "testdata/test_topology.yml")
-	require.NoError(t, err, "Failed to store test topology deployment definition")
 
 	// Check the attributes notifications
 	expectedKeyValuePairs := map[string]string{
@@ -1047,4 +1079,28 @@ func testAttributeNotifications(t *testing.T, kv *api.KV) {
 		require.NotNil(t, kvp, "Unexpected null value for key %s", consulKey)
 		assert.Equal(t, expectedValue, string(kvp.Value), "Wrong value for key %s", key)
 	}
+}
+
+func BenchmarkDefinitionStore(b *testing.B) {
+	log.SetDebug(false)
+	log.SetOutput(ioutil.Discard)
+	stdlog.SetOutput(ioutil.Discard)
+
+	cb := func(c *ctu.TestServerConfig) {
+		c.LogLevel = "err"
+		c.Stdout = ioutil.Discard
+		c.Stderr = ioutil.Discard
+	}
+
+	srv, client := testutil.NewTestConsulInstanceWithConfigAndStore(b, cb)
+	kv := client.KV()
+	defer srv.Stop()
+	deploymentID := testutil.BuildDeploymentID(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		StoreDeploymentDefinition(ctx, kv, fmt.Sprintf("%s-%d", deploymentID, i), "testdata/import_many_types.yaml")
+	}
+	b.StopTimer()
+
 }

@@ -19,19 +19,18 @@ import (
 	"fmt"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/tasks"
-	"github.com/ystia/yorc/v3/tasks/workflow/builder"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/tasks"
+	"github.com/ystia/yorc/v4/tasks/workflow/builder"
 )
 
 // A Collector is responsible for registering new tasks/workflows/executions
@@ -219,16 +218,10 @@ func (c *Collector) prepareForRegistration(operations api.KVTxnOps, taskType tas
 		})
 	}
 
-	ok, response, _, err := c.consulClient.KV().Txn(operations, nil)
+	err := tasks.StoreOperations(c.consulClient.KV(), taskID, operations)
 	if err != nil {
-		return errors.Wrapf(err, "Failed to register task with targetID:%q, taskType:%q", targetID, taskType.String())
-	}
-	if !ok {
-		errs := make([]string, 0)
-		for _, e := range response.Errors {
-			errs = append(errs, e.What)
-		}
-		return errors.Wrapf(err, "Failed to register task with targetID:%q, taskType:%q due to error:%s", targetID, taskType.String(), strings.Join(errs, ", "))
+		return errors.Wrapf(err, "Failed to register task with targetID:%q, taskType:%q due to error %s",
+			targetID, taskType.String(), err.Error())
 	}
 
 	log.Debugf("Registered task %s type %q for target %s\n", taskID, taskType.String(), targetID)

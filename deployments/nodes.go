@@ -25,10 +25,10 @@ import (
 	"github.com/pkg/errors"
 	"vbom.ml/util/sortorder"
 
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 // IsNodeDerivedFrom check if the node's type is derived from another type.
@@ -182,7 +182,7 @@ func GetHostedOnNode(kv *api.KV, deploymentID, nodeName string) (string, error) 
 			return "", errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 		}
 		// Is this "HostedOn" relationship ?
-		if kvp.Value != nil {
+		if kvp != nil && len(kvp.Value) > 0 {
 			if ok, err := IsTypeDerivedFrom(kv, deploymentID, string(kvp.Value), "tosca.relationships.HostedOn"); err != nil {
 				return "", err
 			} else if ok {
@@ -590,7 +590,13 @@ func GetTypeAttributesNames(kv *api.KV, deploymentID, typeName string) ([]string
 			attributesSet[attr] = struct{}{}
 		}
 	}
-	err = storeSubKeysInSet(kv, path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology", "types", typeName, "attributes"), attributesSet)
+
+	typePath, err := locateTypePath(kv, deploymentID, typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	err = storeSubKeysInSet(kv, path.Join(typePath, "attributes"), attributesSet)
 	if err != nil {
 		return nil, err
 	}
@@ -796,11 +802,11 @@ func createNodeInstance(kv *api.KV, consulStore consulutil.ConsulStore, deployme
 
 // DoesNodeExist checks if a given node exist in a deployment
 func DoesNodeExist(kv *api.KV, deploymentID, nodeName string) (bool, error) {
-	kvp, _, err := kv.Get(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/nodes", nodeName, "name"), nil)
+	keys, _, err := kv.Keys(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/nodes", nodeName)+"/", "/", nil)
 	if err != nil {
 		return false, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 	}
-	return kvp != nil && len(kvp.Value) > 0, nil
+	return len(keys) > 0, nil
 }
 
 // GetNodeMetadata retrieves the related node metadata key if exists
@@ -813,4 +819,36 @@ func GetNodeMetadata(kv *api.KV, deploymentID, nodeName, key string) (bool, stri
 		return false, "", nil
 	}
 	return true, string(kvp.Value), nil
+}
+
+// NodeHasAttribute returns true if the node type has an attribute named attributeName defined
+//
+// exploreParents switch enable attribute check on parent types
+//
+// This is basically a shorthand for GetNodeType then TypeHasAttribute
+func NodeHasAttribute(kv *api.KV, deploymentID, nodeName, attributeName string, exploreParents bool) (bool, error) {
+	typeName, err := GetNodeType(kv, deploymentID, nodeName)
+	if err != nil {
+		return false, err
+	}
+	return TypeHasAttribute(kv, deploymentID, typeName, attributeName, exploreParents)
+}
+
+// NodeHasProperty returns true if the node type has a property named propertyName defined
+//
+// exploreParents switch enable property check on parent types
+//
+// This is basically a shorthand for GetNodeType then TypeHasProperty
+func NodeHasProperty(kv *api.KV, deploymentID, nodeName, propertyName string, exploreParents bool) (bool, error) {
+	typeName, err := GetNodeType(kv, deploymentID, nodeName)
+	if err != nil {
+		return false, err
+	}
+	return TypeHasProperty(kv, deploymentID, typeName, propertyName, exploreParents)
+}
+
+// DeleteNode deletes the given node from the Consul store
+func DeleteNode(kv *api.KV, deploymentID, nodeName string) error {
+	_, err := kv.DeleteTree(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/nodes", nodeName), nil)
+	return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 }

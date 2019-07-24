@@ -25,13 +25,13 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/helper/sshutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/prov/terraform/commons"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/helper/sshutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/prov/terraform/commons"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 const infrastructureName = "google"
@@ -47,7 +47,6 @@ func (g *googleGenerator) GenerateTerraformInfraForNode(ctx context.Context, cfg
 		return false, nil, nil, nil, err
 	}
 	kv := cClient.KV()
-	nodeKey := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology", "nodes", nodeName)
 	terraformStateKey := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "terraform-state", nodeName)
 
 	infrastructure := commons.Infrastructure{}
@@ -79,7 +78,7 @@ func (g *googleGenerator) GenerateTerraformInfraForNode(ctx context.Context, cfg
 		},
 	}
 
-	log.Debugf("inspecting node %s", nodeKey)
+	log.Debugf("inspecting node %s", nodeName)
 	nodeType, err := deployments.GetNodeType(kv, deploymentID, nodeName)
 	if err != nil {
 		return false, nil, nil, nil, err

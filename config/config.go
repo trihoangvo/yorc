@@ -66,6 +66,9 @@ const DefaultCacheFacts = false
 // DefaultWfStepGracefulTerminationTimeout is the default timeout for a graceful termination of a workflow step during concurrent workflow step failure
 const DefaultWfStepGracefulTerminationTimeout = 2 * time.Minute
 
+// DefaultPurgedDeploymentsEvictionTimeout is the default timeout after which final events and logs for a purged deployment are actually deleted.
+const DefaultPurgedDeploymentsEvictionTimeout = 30 * time.Minute
+
 // DefaultAnsibleJobMonInterval is the default monitoring interval for Jobs handled by Ansible
 const DefaultAnsibleJobMonInterval = 15 * time.Second
 
@@ -89,6 +92,7 @@ type Configuration struct {
 	Infrastructures                  map[string]DynamicMap `yaml:"infrastructures,omitempty" mapstructure:"infrastructures"`
 	Vault                            DynamicMap            `yaml:"vault,omitempty" mapstructure:"vault"`
 	WfStepGracefulTerminationTimeout time.Duration         `yaml:"wf_step_graceful_termination_timeout,omitempty" mapstructure:"wf_step_graceful_termination_timeout"`
+	PurgedDeploymentsEvictionTimeout time.Duration         `yaml:"purged_deployments_eviction_timeout,omitempty" mapstructure:"purged_deployments_eviction_timeout"`
 	ServerID                         string                `yaml:"server_id,omitempty" mapstructure:"server_id"`
 	Terraform                        Terraform             `yaml:"terraform,omitempty" mapstructure:"terraform"`
 	DisableSSHAgent                  bool                  `yaml:"disable_ssh_agent,omitempty" mapstructure:"disable_ssh_agent"`
@@ -119,16 +123,18 @@ func (ho HostedOperations) Format(s fmt.State, verb rune) {
 
 // Ansible configuration
 type Ansible struct {
-	UseOpenSSH              bool             `yaml:"use_openssh,omitempty" mapstructure:"use_openssh" json:"use_open_ssh,omitempty"`
-	DebugExec               bool             `yaml:"debug,omitempty" mapstructure:"debug" json:"debug_exec,omitempty"`
-	ConnectionRetries       int              `yaml:"connection_retries,omitempty" mapstructure:"connection_retries" json:"connection_retries,omitempty"`
-	OperationRemoteBaseDir  string           `yaml:"operation_remote_base_dir,omitempty" mapstructure:"operation_remote_base_dir" json:"operation_remote_base_dir,omitempty"`
-	KeepOperationRemotePath bool             `yaml:"keep_operation_remote_path,omitempty" mapstructure:"keep_operation_remote_path" json:"keep_operation_remote_path,omitempty"`
-	KeepGeneratedRecipes    bool             `yaml:"keep_generated_recipes,omitempty" mapstructure:"keep_generated_recipes" json:"keep_generated_recipes,omitempty"`
-	ArchiveArtifacts        bool             `yaml:"archive_artifacts,omitempty" mapstructure:"archive_artifacts" json:"archive_artifacts,omitempty"`
-	CacheFacts              bool             `yaml:"cache_facts,omitempty" mapstructure:"cache_facts" json:"cache_facts,omitempty"`
-	HostedOperations        HostedOperations `yaml:"hosted_operations,omitempty" mapstructure:"hosted_operations" json:"hosted_operations,omitempty"`
-	JobsChecksPeriod        time.Duration    `yaml:"job_monitoring_time_interval,omitempty" mapstructure:"job_monitoring_time_interval" json:"job_monitoring_time_interval,omitempty"`
+	UseOpenSSH              bool                         `yaml:"use_openssh,omitempty" mapstructure:"use_openssh" json:"use_open_ssh,omitempty"`
+	DebugExec               bool                         `yaml:"debug,omitempty" mapstructure:"debug" json:"debug_exec,omitempty"`
+	ConnectionRetries       int                          `yaml:"connection_retries,omitempty" mapstructure:"connection_retries" json:"connection_retries,omitempty"`
+	OperationRemoteBaseDir  string                       `yaml:"operation_remote_base_dir,omitempty" mapstructure:"operation_remote_base_dir" json:"operation_remote_base_dir,omitempty"`
+	KeepOperationRemotePath bool                         `yaml:"keep_operation_remote_path,omitempty" mapstructure:"keep_operation_remote_path" json:"keep_operation_remote_path,omitempty"`
+	KeepGeneratedRecipes    bool                         `yaml:"keep_generated_recipes,omitempty" mapstructure:"keep_generated_recipes" json:"keep_generated_recipes,omitempty"`
+	ArchiveArtifacts        bool                         `yaml:"archive_artifacts,omitempty" mapstructure:"archive_artifacts" json:"archive_artifacts,omitempty"`
+	CacheFacts              bool                         `yaml:"cache_facts,omitempty" mapstructure:"cache_facts" json:"cache_facts,omitempty"`
+	HostedOperations        HostedOperations             `yaml:"hosted_operations,omitempty" mapstructure:"hosted_operations" json:"hosted_operations,omitempty"`
+	JobsChecksPeriod        time.Duration                `yaml:"job_monitoring_time_interval,omitempty" mapstructure:"job_monitoring_time_interval" json:"job_monitoring_time_interval,omitempty"`
+	Config                  map[string]map[string]string `yaml:"config,omitempty" mapstructure:"config"`
+	Inventory               map[string][]string          `yaml:"inventory,omitempty" mapstructure:"inventory"`
 }
 
 // Consul configuration

@@ -33,12 +33,12 @@ import (
 	survey "gopkg.in/AlecAivazis/survey.v1"
 	yaml "gopkg.in/yaml.v2"
 
-	"github.com/ystia/yorc/v3/commands"
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/helper/collections"
-	"github.com/ystia/yorc/v3/registry"
-	"github.com/ystia/yorc/v3/rest"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/commands"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/helper/collections"
+	"github.com/ystia/yorc/v4/resources"
+	"github.com/ystia/yorc/v4/rest"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 var inputValues TopologyValues
@@ -58,6 +58,10 @@ var (
 		"ansible.extra_package_repository_url": defaultInputType{
 			description: "URL of package indexes where to find the ansible package, instead of the default Python Package repository",
 			value:       "",
+		},
+		"ansible.use_openssh": defaultInputType{
+			description: "Prefer OpenSSH over Paramiko, python implementation of SSH",
+			value:       false,
 		},
 	}
 
@@ -93,6 +97,10 @@ var (
 		"yorc.workers_number": defaultInputType{
 			description: "Number of Yorc workers handling bootstrap deployment tasks",
 			value:       config.DefaultWorkersNumber,
+		},
+		"yorc.resources_prefix": defaultInputType{
+			description: "Prefix used to create resources (like Computes and so on)",
+			value:       "yorc-",
 		},
 	}
 
@@ -166,11 +174,11 @@ var (
 	jdkDefaultInputs = map[string]defaultInputType{
 		"jdk.download_url": defaultInputType{
 			description: "Java Development Kit download URL",
-			value:       "https://download.oracle.com/otn-pub/java/jdk/8u202-b08/1961070e4c9b4e26a04e7f5a083f551e/jdk-8u202-linux-x64.tar.gz",
+			value:       "https://api.adoptopenjdk.net/v2/binary/releases/openjdk8?openjdk_impl=hotspot&os=linux&arch=x64&release=jdk8u212-b03&type=jdk",
 		},
 		"jdk.version": defaultInputType{
 			description: "Java Development Kit version",
-			value:       "1.8.0-202-b08",
+			value:       "1.8.0-212-b03",
 		},
 	}
 
@@ -180,6 +188,8 @@ var (
 			value:       "",
 		},
 	}
+
+	mandatoryHostPoolLabels = []string{"public_address", "private_address"}
 )
 
 // Infrastructure inputs, which when missing, will have to be provided interactively
@@ -259,6 +269,8 @@ func setBootstrapExtraParams(args []string, cmd *cobra.Command) error {
 				bootstrapCmd.PersistentFlags().String(flatKey, input.value.(string), input.description)
 			case int:
 				bootstrapCmd.PersistentFlags().Int(flatKey, input.value.(int), input.description)
+			case bool:
+				bootstrapCmd.PersistentFlags().Bool(flatKey, input.value.(bool), input.description)
 			case []string:
 				bootstrapCmd.PersistentFlags().StringSlice(flatKey, input.value.([]string), input.description)
 			default:
@@ -595,10 +607,24 @@ func initializeInputs(inputFilePath, resourcesPath string, configuration config.
 				return err
 			}
 		} else {
+
 			// The private SSH key used to connect to each host is the Yorc private key
+			// Initializing this private key and checking as well mandatory
+			// labels are defined
 			privateKeyPath := filepath.Join(inputValues.Yorc.DataDir, ".ssh", "yorc.pem")
-			for i := range inputValues.Hosts {
-				inputValues.Hosts[i].Connection.PrivateKey = privateKeyPath
+			for _, host := range inputValues.Hosts {
+				host.Connection.PrivateKey = privateKeyPath
+				// Checking labels
+				if host.Labels == nil {
+					return fmt.Errorf("Missing mandatory labels %s for host %s",
+						strings.Join(mandatoryHostPoolLabels, ", "), host.Name)
+				}
+				for _, label := range mandatoryHostPoolLabels {
+					if _, found := host.Labels[label]; !found {
+						return fmt.Errorf("Missing mandatory label %s for host %s",
+							label, host.Name)
+					}
+				}
 			}
 		}
 	}
@@ -606,7 +632,7 @@ func initializeInputs(inputFilePath, resourcesPath string, configuration config.
 	// Get on-demand resources definition for this infrastructure type
 	onDemandResourceName := fmt.Sprintf("yorc-%s-types.yml", infrastructureType)
 
-	data, err = registry.GetRegistry().GetToscaDefinition(onDemandResourceName)
+	data, err = resources.GetTOSCADefinition(onDemandResourceName)
 	if err != nil {
 		return err
 	}
@@ -717,7 +743,8 @@ func initializeInputs(inputFilePath, resourcesPath string, configuration config.
 	}
 
 	// In insecure mode, the infrastructure secrets will not be stored in vault
-	if insecure {
+	// (Hosts Pool infrastructure config doesn't have this use_vault property)
+	if insecure && infrastructureType != "hostspool" {
 		inputValues.Infrastructures[infrastructureType].Set("use_vault", false)
 	}
 
@@ -1097,23 +1124,27 @@ func getHostsInputs(resourcesPath string) ([]rest.HostConfig, error) {
 			hostConfig.Connection.Port = 22
 		}
 
-		//asking public address first
-		fmt.Println("Defining key/value labels for this host. Defining public_address value is mandatory")
+		//asking public/private address first
+		fmt.Println("Defining key/value labels for this host")
+		fmt.Printf("Inputs for labels %s are mandatory\n",
+			strings.Join(mandatoryHostPoolLabels, ", "))
 		hostConfig.Labels = make(map[string]string)
 
-		prompt = &survey.Input{
-			Message: "public_address value:"}
+		for _, label := range mandatoryHostPoolLabels {
+			prompt = &survey.Input{
+				Message: label + " value:"}
 
-		question = &survey.Question{
-			Name:     "value",
-			Prompt:   prompt,
-			Validate: survey.Required,
-		}
-		if err := survey.Ask([]*survey.Question{question}, &answer); err != nil {
-			return nil, err
-		}
+			question = &survey.Question{
+				Name:     "value",
+				Prompt:   prompt,
+				Validate: survey.Required,
+			}
+			if err := survey.Ask([]*survey.Question{question}, &answer); err != nil {
+				return nil, err
+			}
 
-		hostConfig.Labels["public_address"] = answer.Value
+			hostConfig.Labels[label] = answer.Value
+		}
 
 		//asking for additional key values labels
 		for {

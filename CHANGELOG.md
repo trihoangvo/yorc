@@ -4,6 +4,101 @@
 
 ### ENHANCEMENTS
 
+* Allow to disable automatic Consul snapshots and restore when upgrading Yorc using ̀`YORC_DISABLE_CONSUL_SNAPSHOTS_ON_UPGRADE` env variable ([GH-486](https://github.com/ystia/yorc/issues/486))
+
+## 4.0.0-M1 (July 12, 2019)
+
+### BREAKING CHANGES
+
+* Start v4.0 cycle ([GH-444](https://github.com/ystia/yorc/issues/444)):
+  * deprecated API functions are now removed
+  * the former and deprecated way to handle Kubernetes deployments is not supported anymore
+
+### BUG FIXES
+
+* Failure to deploy/undeploy big application: Transaction contains too many operations ([GH-484](https://github.com/ystia/yorc/issues/484))
+* Wrong resources allocation on shareable Hosts Pool ([GH-426](https://github.com/ystia/yorc/issues/426))
+* Deleting one host in Pool deletes other hosts having as prefix the deleted hostname ([GH-430](https://github.com/ystia/yorc/issues/430))
+* Yorc should support long standard operation names as well as short ones ([GH-300](https://github.com/ystia/yorc/issues/300))
+* Fix attributes notifications for services (substitutions) ([GH-423](https://github.com/ystia/yorc/issues/423))
+* Monitoring can be stopped before the job termination ([GH-438](https://github.com/ystia/yorc/issues/438))
+* mem_per_node slurm option parameter is limited to integer number of GB ([GH-446](https://github.com/ystia/yorc/issues/446))
+* Job node state remains to "executing" when Ansible job fails ([GH-455](https://github.com/ystia/yorc/issues/455))
+* Panic occurs uploading job slurm artifacts during load test ([GH-465](https://github.com/ystia/yorc/issues/465))
+
+### ENHANCEMENTS
+
+* Support OpenStack Block storage API v3 ([GH-440](https://github.com/ystia/yorc/issues/440))
+* Expose bypass error parameter on workflow ([GH-425](https://github.com/ystia/yorc/issues/425))
+* Support Alien4Cloud 2.2 ([GH-441](https://github.com/ystia/yorc/issues/441))
+* Allow to provide extra env vars to Alien4Cloud during bootstrap ([GH-452](https://github.com/ystia/yorc/issues/452))
+* Port CLI and Rest API minor changes for premium update feature ([GH-467](https://github.com/ystia/yorc/issues/467))
+* Port changes for update nodes ([GH-476](https://github.com/ystia/yorc/issues/476))
+
+## 3.2.0 (May 31, 2019)
+
+### ENHANCEMENTS
+
+* Bootstrap support of Ubuntu 1904 ([GH-419](https://github.com/ystia/yorc/issues/419))
+* Print plugin logs in higher level than DEBUG ([GH-329](https://github.com/ystia/yorc/issues/329))
+* Slurm job logs are displayed many time ([GH-397](https://github.com/ystia/yorc/issues/397))
+* Allow to configure resources prefix for bootstrapped Yorc ([GH-399](https://github.com/ystia/yorc/issues/399))
+
+### BUG FIXES
+
+* Undeployment of a Hosts Pool bootstrapped setup doesn't clean correctly Hosts Pool ([GH-406](https://github.com/ystia/yorc/issues/406))
+* Failure to deploy an application with Compute resources constraints on Hosts Pool ([GH-409](https://github.com/ystia/yorc/issues/409))
+* Yorc server crashes on error: fatal error: concurrent map write ([GH-413](https://github.com/ystia/yorc/issues/413))
+* Yorc bootstrap on HostPool in interactive mode should ask for hosts private IP addresses also ([GH-411](https://github.com/ystia/yorc/issues/411))
+* Secure bootstrap on Hosts Pool fails configuring infra, error "playbooks must be a list of plays" ([GH-396](https://github.com/ystia/yorc/issues/396))
+* Kubernetes infrastructure configuration support in Yorc is not able to detect erroneous config file path ([GH-378](https://github.com/ystia/yorc/issues/378))
+* Emit a persistent event on deployment purge ([GH-402](https://github.com/ystia/yorc/issues/402))
+* Invalid memory address panic appends on a workflow with non-existent on success step reference ([GH-417](https://github.com/ystia/yorc/issues/417))
+* Erroneous Warning message on purged deployments timestamp ([GH-421](https://github.com/ystia/yorc/issues/421))
+
+## 3.2.0-RC1 (May 10, 2019)
+
+### BUG FIXES
+
+* Can't deploy applications using compute instances filters on Hosts Pools ([GH-385](https://github.com/ystia/yorc/issues/385))
+* Unexpected deployment deletion during topology unmarshalling ([GH-375](https://github.com/ystia/yorc/issues/375))
+* Parsing of a description field of an TOSCA interface is interpreted as an operation ([GH-372](https://github.com/ystia/yorc/issues/372))
+* Yorc does not support python3 ([GH-319](https://github.com/ystia/yorc/issues/319))
+* Migrate from Oracle JDK to OpenJDK when bootstrapping Yorc/Alien4Cloud ([GH-383](https://github.com/ystia/yorc/issues/383))
+* Monitoring causes Yorc and Consul CPU over consumption ([GH-388](https://github.com/ystia/yorc/issues/388))
+* Bootstrap step YorcOnDemandLocationResources fails on setup with http proxy defined ([GH-384](https://github.com/ystia/yorc/issues/384))
+
+### ENHANCEMENTS
+
+* Add a note on ansible upgrade in documentation ([GH-373](https://github.com/ystia/yorc/issues/373))
+* Policies API update ([GH-380](https://github.com/ystia/yorc/issues/380))
+* Reduce the volume of data stored in Consul by removing builtin types duplicates on deployments ([GH-371](https://github.com/ystia/yorc/issues/371))
+* Execute custom workflows and custom commands on selected instances ([GH-107](https://github.com/ystia/yorc/issues/107))
+* Support OpenStack authentication with user domain ([GH-355](https://github.com/ystia/yorc/issues/355))
+
+## 3.2.0-M5 (April 19, 2019)
+
+### FEATURES
+
+* Implement an anti-affinity placement policy for Openstack ([GH-84](https://github.com/ystia/yorc/issues/84))
+* Allow to configure Ansible configuration file ([GH-346](https://github.com/ystia/yorc/issues/346))
+* Monitor deployed services liveness ([GH-104](https://github.com/ystia/yorc/issues/104))
+
+### ENHANCEMENTS
+
+* Add job status feedback for slurm and k8s jobs ([GH-351](https://github.com/ystia/yorc/issues/351))
+* Upgrade Ansible to 2.7.9 ([GH-364](https://github.com/ystia/yorc/issues/364))
+* Reduce the volume of data stored in Consul part 1 ([GH-361](https://github.com/ystia/yorc/issues/361))
+
+### BUG FIXES
+
+* Unable to delete a deployment with non-conform topology ([GH-368](https://github.com/ystia/yorc/issues/368))
+
+## 3.2.0-M4 (March 29, 2019)
+
+### ENHANCEMENTS
+
+* REST API doc changes on deployment update support in premium version ([GH-352](https://github.com/ystia/yorc/issues/352))
 * Bootstrap Yorc with a Vault instance ([GH-282](https://github.com/ystia/yorc/issues/282))
 * Refactor Slurm jobs ([GH-220](https://github.com/ystia/yorc/issues/220))
 * Yorc does not log a slurm command error message, making diagnostic difficult ([GH-348](https://github.com/ystia/yorc/issues/348))
@@ -11,6 +106,7 @@
 ### FEATURES
 
 * Yorc hostspool now allows more filtering ([GH-89](https://github.com/ystia/yorc/issues/89))
+* Yorc support of kubernetes PersistentVolumeClaim ([GH-209](https://github.com/ystia/yorc/issues/209))
 
 ### BUG FIXES
 
@@ -282,7 +378,7 @@ This release brings a tech preview support of jobs scheduling. It allows to desi
 
 In this release we mainly focused on the integration with Slurm for supporting this feature (but we are also working on Kubernetes for the next release :smile:). Bellow are new supported TOSCA types and implementations:
 
-* SlurmJobs: will lead to issuing a srun command with a given executable file.  
+* SlurmJobs: will lead to issuing a srun command with a given executable file.
 * SlurmBatch: will lead to issuing a sbatch command with a given batch file and associated executables
 * Singularity integration: allows to execute a Singularity container instead of an executable file.
 

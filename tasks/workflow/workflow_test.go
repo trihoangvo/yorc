@@ -26,12 +26,12 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/prov"
-	"github.com/ystia/yorc/v3/registry"
-	"github.com/ystia/yorc/v3/tasks/workflow/builder"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/prov"
+	"github.com/ystia/yorc/v4/registry"
+	"github.com/ystia/yorc/v4/tasks/workflow/builder"
 )
 
 type mockExecutor struct {
@@ -183,4 +183,16 @@ func testRunStep(t *testing.T, srv1 *testutil.TestServer, cc *api.Client) {
 func clearActivityHooks() {
 	preActivityHooks = make([]ActivityHook, 0)
 	postActivityHooks = make([]ActivityHook, 0)
+}
+
+func testRegisterInlineWorkflow(t *testing.T, srv1 *testutil.TestServer, cc *api.Client) {
+	kv := cc.KV()
+	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
+	topologyPath := "../../deployments/testdata/inline_workflow.yaml"
+	err := deployments.StoreDeploymentDefinition(context.Background(), kv, deploymentID, topologyPath)
+	require.NoError(t, err, "Unexpected error storing %s", topologyPath)
+
+	_, err = builder.BuildWorkFlow(kv, deploymentID, "install")
+	require.NoError(t, err, "Unexpected error building workflow for %s", topologyPath)
+
 }

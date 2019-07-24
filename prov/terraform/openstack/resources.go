@@ -15,7 +15,7 @@
 package openstack
 
 import (
-	"github.com/ystia/yorc/v3/prov/terraform/commons"
+	"github.com/ystia/yorc/v4/prov/terraform/commons"
 )
 
 const defaultOSRegion = "RegionOne"
@@ -34,11 +34,9 @@ type ComputeInstance struct {
 	AvailabilityZone string           `json:"availability_zone,omitempty"`
 	Networks         []ComputeNetwork `json:"network,omitempty"`
 	KeyPair          string           `json:"key_pair,omitempty"`
+	SchedulerHints   SchedulerHints   `json:"scheduler_hints,omitempty"`
 
 	commons.Resource
-
-	// Deprecated use ComputeVolumeAttach instead
-	Volumes []Volume `json:"volume,omitempty"`
 }
 
 // A Volume represent an OpenStack volume (BlockStorage) attachment to a ComputeInstance
@@ -54,9 +52,6 @@ type ComputeNetwork struct {
 	Port          string `json:"port,omitempty"`
 	FixedIPV4     string `json:"fixed_ip_v4,omitempty"`
 	AccessNetwork bool   `json:"access_network,omitempty"`
-
-	// Deprecated use ComputeFloatingIPAssociate instead
-	FloatingIP string `json:"floating_ip,omitempty"`
 }
 
 // A BlockStorageVolume represent an OpenStack volume (BlockStorage)
@@ -100,7 +95,6 @@ type AllocationPool struct {
 }
 
 // A ComputeFloatingIPAssociate associates a floating IP to an instance.
-// This should be used instead of the floating_ip options in openstack_compute_instance_v2 now deprecated.
 type ComputeFloatingIPAssociate struct {
 	Region     string `json:"region"`
 	FloatingIP string `json:"floating_ip"`
@@ -109,10 +103,21 @@ type ComputeFloatingIPAssociate struct {
 }
 
 // A ComputeVolumeAttach attaches a volume to an instance.
-// This should be used instead of the floating_ip options in openstack_compute_instance_v2 now deprecated.
 type ComputeVolumeAttach struct {
 	Region     string `json:"region"`
 	VolumeID   string `json:"volume_id"`
 	InstanceID string `json:"instance_id"`
 	Device     string `json:"device,omitempty"`
+}
+
+// ServerGroup represents an OpenStack Server group
+// https://www.terraform.io/docs/providers/openstack/r/compute_servergroup_v2.html
+type ServerGroup struct {
+	Name     string   `json:"name"`
+	Policies []string `json:"policies"`
+}
+
+// SchedulerHints represents a scheduler_hints block for computeInstance
+type SchedulerHints struct {
+	Group string `json:"group"`
 }

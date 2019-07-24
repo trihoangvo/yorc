@@ -38,42 +38,58 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/helper/executil"
-	"github.com/ystia/yorc/v3/helper/pathutil"
-	"github.com/ystia/yorc/v3/helper/provutil"
-	"github.com/ystia/yorc/v3/helper/sshutil"
-	"github.com/ystia/yorc/v3/helper/stringutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/prov"
-	"github.com/ystia/yorc/v3/prov/operations"
-	"github.com/ystia/yorc/v3/tasks"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/helper/executil"
+	"github.com/ystia/yorc/v4/helper/pathutil"
+	"github.com/ystia/yorc/v4/helper/provutil"
+	"github.com/ystia/yorc/v4/helper/sshutil"
+	"github.com/ystia/yorc/v4/helper/stringutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/prov"
+	"github.com/ystia/yorc/v4/prov/operations"
+	"github.com/ystia/yorc/v4/tasks"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 const taskContextOutput = "task_context"
 
-const ansibleConfig = `[defaults]
-host_key_checking=False
-timeout=30
-stdout_callback = yaml
-retry_files_save_path = #PLAY_PATH#
-nocows = 1
-`
-const ansibleFactCaching = `
-gathering = smart
-fact_caching = jsonfile
-fact_caching_connection = #FACTS_CACHE_PATH#/facts_cache
-`
-
-const vaultPassScript = `#!/usr/bin/env python
+const vaultPassScriptFormat = `#!/usr/bin/env %s
 
 import os
-print os.environ['VAULT_PASSWORD']
+print(os.environ['VAULT_PASSWORD'])
 `
+
+const ansibleConfigDefaultsHeader = "defaults"
+const ansibleInventoryHostsHeader = "target_hosts"
+const ansibleInventoryHostedHeader = "hosted_operations"
+const ansibleInventoryHostsVarsHeader = ansibleInventoryHostsHeader + ":vars"
+const ansibleInventoryHostedVarsHeader = ansibleInventoryHostedHeader + ":vars"
+
+var ansibleDefaultConfig = map[string]map[string]string{
+	ansibleConfigDefaultsHeader: map[string]string{
+		"host_key_checking": "False",
+		"timeout":           "30",
+		"stdout_callback":   "yaml",
+		"nocows":            "1",
+	},
+}
+
+var ansibleFactCaching = map[string]string{
+	"gathering":    "smart",
+	"fact_caching": "jsonfile",
+}
+
+var ansibleInventoryConfig = map[string][]string{
+	ansibleInventoryHostsVarsHeader: []string{
+		"ansible_ssh_common_args=\"-o ConnectionAttempts=20\"",
+	},
+	ansibleInventoryHostedVarsHeader: []string{
+		"ansible_python_interpreter=/usr/bin/env python",
+	},
+}
 
 type ansibleRetriableError struct {
 	root error
@@ -128,15 +144,15 @@ type ansibleRunner interface {
 }
 
 type executionCommon struct {
-	kv                       *api.KV
-	cfg                      config.Configuration
-	ctx                      context.Context
-	deploymentID             string
-	taskID                   string
-	NodeName                 string
-	operation                prov.Operation
-	NodeType                 string
-	Description              string
+	kv           *api.KV
+	cfg          config.Configuration
+	ctx          context.Context
+	deploymentID string
+	taskID       string
+	NodeName     string
+	operation    prov.Operation
+	NodeType     string
+	// Description              string
 	OperationRemoteBaseDir   string
 	OperationRemotePath      string
 	KeepOperationRemotePath  bool
@@ -149,8 +165,6 @@ type executionCommon struct {
 	Dependencies             []string
 	hosts                    map[string]*hostConnection
 	OperationPath            string
-	NodePath                 string
-	NodeTypePath             string
 	Artifacts                map[string]string
 	OverlayPath              string
 	Context                  map[string]string
@@ -230,13 +244,11 @@ func newExecution(ctx context.Context, kv *api.KV, cfg config.Configuration, tas
 }
 
 func (e *executionCommon) resolveOperation() error {
-	e.NodePath = path.Join(consulutil.DeploymentKVPrefix, e.deploymentID, "topology/nodes", e.NodeName)
 	var err error
 	e.NodeType, err = deployments.GetNodeType(e.kv, e.deploymentID, e.NodeName)
 	if err != nil {
 		return err
 	}
-	e.NodeTypePath = path.Join(consulutil.DeploymentKVPrefix, e.deploymentID, "topology/types", e.NodeType)
 	if e.operation.RelOp.IsRelationshipOperation {
 		e.relationshipType, err = deployments.GetRelationshipForRequirement(e.kv, e.deploymentID, e.NodeName, e.operation.RelOp.RequirementIndex)
 		if err != nil {
@@ -274,13 +286,13 @@ func (e *executionCommon) resolveOperation() error {
 	} else {
 		e.Dependencies = make([]string, 0)
 	}
-	kvPair, _, err = e.kv.Get(e.OperationPath+"/description", nil)
-	if err != nil {
-		return errors.Wrap(err, "Consul query failed: ")
-	}
-	if kvPair != nil && len(kvPair.Value) > 0 {
-		e.Description = string(kvPair.Value)
-	}
+	// kvPair, _, err = e.kv.Get(e.OperationPath+"/description", nil)
+	// if err != nil {
+	// 	return errors.Wrap(err, "Consul query failed: ")
+	// }
+	// if kvPair != nil && len(kvPair.Value) > 0 {
+	// 	e.Description = string(kvPair.Value)
+	// }
 
 	// if operation_host is not overridden by requirement, we retrieve operation/implementation definition info
 	if e.operation.OperationHost == "" {
@@ -814,7 +826,7 @@ func (e *executionCommon) generateHostConnection(ctx context.Context, buffer *by
 		}
 	} else {
 		sshCredentials := e.getSSHCredentials(ctx, host, true)
-		buffer.WriteString(fmt.Sprintf(" ansible_ssh_user=%s ansible_ssh_common_args=\"-o ConnectionAttempts=20\"", sshCredentials.user))
+		buffer.WriteString(fmt.Sprintf(" ansible_ssh_user=%s", sshCredentials.user))
 		// Set with priority private key against password
 		if e.cfg.DisableSSHAgent && sshCredentials.privateKey != "" {
 			// check privateKey's a valid path
@@ -881,6 +893,16 @@ func (e *executionCommon) executeWithCurrentInstance(ctx context.Context, retry 
 		return err
 	}
 
+	pythonInterpreter := "python"
+	if _, err := exec.LookPath(pythonInterpreter); err != nil {
+		log.Debug("Found no python intepreter, attempting to use python3")
+		pythonInterpreter = "python3"
+		if _, err = exec.LookPath(pythonInterpreter); err != nil {
+			return fmt.Errorf("Found no python or python3 interpret in path")
+		}
+	}
+
+	vaultPassScript := fmt.Sprintf(vaultPassScriptFormat, pythonInterpreter)
 	if err = ioutil.WriteFile(filepath.Join(ansibleRecipePath, ".vault_pass"), []byte(vaultPassScript), 0764); err != nil {
 		err = errors.Wrap(err, "Failed to write .vault_pass file")
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelERROR, e.deploymentID).RegisterAsString(err.Error())
@@ -888,7 +910,16 @@ func (e *executionCommon) executeWithCurrentInstance(ctx context.Context, retry 
 	}
 
 	var buffer bytes.Buffer
-	buffer.WriteString("[all]\n")
+	var header, emptySectionHeader string
+	if e.isOrchestratorOperation {
+		header = ansibleInventoryHostedHeader
+		emptySectionHeader = ansibleInventoryHostsHeader
+	} else {
+		header = ansibleInventoryHostsHeader
+		emptySectionHeader = ansibleInventoryHostedHeader
+	}
+	buffer.WriteString(fmt.Sprintf("[%s]\n", emptySectionHeader))
+	buffer.WriteString(fmt.Sprintf("[%s]\n", header))
 	for instanceName, host := range e.hosts {
 		err = e.generateHostConnection(ctx, &buffer, host)
 		if err != nil {
@@ -975,9 +1006,28 @@ func (e *executionCommon) executeWithCurrentInstance(ctx context.Context, retry 
 		}
 	}
 
-	if e.isOrchestratorOperation {
-		buffer.WriteString("\n[all:vars]\n")
-		buffer.WriteString("ansible_python_interpreter=/usr/bin/env python\n")
+	// Add inventory settings
+	inventoryConfig := make(map[string][]string)
+	for header, vars := range ansibleInventoryConfig {
+		inventoryConfig[header] = append(inventoryConfig[header], vars...)
+	}
+	// Add variables in Yorc configuration, potentially overriding Yorc
+	// default values
+	for header, vars := range e.cfg.Ansible.Inventory {
+		// The header can be quoted in configuration if it contains a colon
+		key, err := strconv.Unquote(header)
+		if err != nil {
+			key = header
+		}
+		inventoryConfig[key] = append(inventoryConfig[header], vars...)
+	}
+
+	// Create corresponding entries in inventory
+	for header, vars := range inventoryConfig {
+		buffer.WriteString(fmt.Sprintf("[%s]\n", header))
+		for _, val := range vars {
+			buffer.WriteString(fmt.Sprintf("%s\n", val))
+		}
 	}
 
 	if err = ioutil.WriteFile(filepath.Join(ansibleRecipePath, "hosts"), buffer.Bytes(), 0664); err != nil {
@@ -986,16 +1036,12 @@ func (e *executionCommon) executeWithCurrentInstance(ctx context.Context, retry 
 		return err
 	}
 
-	ansibleCfgContent := strings.Replace(ansibleConfig, "#PLAY_PATH#", ansibleRecipePath, -1)
-	if e.CacheFacts {
-		ansibleCfgCacheContent := strings.Replace(ansibleFactCaching, "#FACTS_CACHE_PATH#", ansiblePath, -1)
-		ansibleCfgContent += ansibleCfgCacheContent
-	}
-	if err = ioutil.WriteFile(filepath.Join(ansibleRecipePath, "ansible.cfg"), []byte(ansibleCfgContent), 0664); err != nil {
-		err = errors.Wrap(err, "Failed to write ansible.cfg file")
+	// Generating Ansible config
+	if err = e.generateAnsibleConfigurationFile(ansiblePath, ansibleRecipePath); err != nil {
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelERROR, e.deploymentID).RegisterAsString(err.Error())
 		return err
 	}
+
 	// e.OperationRemoteBaseDir is an unique base temp directory for multiple executions
 	e.OperationRemoteBaseDir = stringutil.UniqueTimestampedName(e.cfg.Ansible.OperationRemoteBaseDir+"_", "")
 	if e.operation.RelOp.IsRelationshipOperation {
@@ -1050,6 +1096,7 @@ func (e *executionCommon) executeWithCurrentInstance(ctx context.Context, retry 
 					continue
 				}
 				if e.Outputs[line[0]] != taskContextOutput {
+					// TODO this should be part of the deployments package
 					if err = consulutil.StoreConsulKeyAsString(path.Join(consulutil.DeploymentKVPrefix, e.deploymentID, "topology", e.Outputs[line[0]]), line[1]); err != nil {
 						return err
 					}
@@ -1291,4 +1338,65 @@ func (e *executionCommon) vaultEncodeString(s, ansibleRecipePath string) (string
 	err := cmd.Run()
 	return outBuf.String(), errors.Wrapf(err, "failed to encode ansible vault token, stderr: %q", errBuf.String())
 
+}
+
+// generateAnsibleConfigurationFile generates an ansible.cfg file using default
+// settings which can be completed/overriden by settings providing in Yorc Server
+// configuration
+func (e *executionCommon) generateAnsibleConfigurationFile(
+	ansiblePath, ansibleRecipePath string) error {
+
+	ansibleConfig := getAnsibleConfigFromDefault()
+
+	// Adding settings whose values are known at runtime, related to the deployment
+	// directory path
+	ansibleConfig[ansibleConfigDefaultsHeader]["retry_files_save_path"] = ansibleRecipePath
+	if e.CacheFacts {
+		ansibleFactCaching["fact_caching_connection"] = path.Join(ansiblePath, "facts_cache")
+
+		for k, v := range ansibleFactCaching {
+			ansibleConfig[ansibleConfigDefaultsHeader][k] = v
+		}
+	}
+
+	// Ansible configuration user-defined values provided in Yorc Server configuration
+	// can override default settings
+	for header, settings := range e.cfg.Ansible.Config {
+		if _, ok := ansibleConfig[header]; !ok {
+			ansibleConfig[header] = make(map[string]string, len(settings))
+		}
+		for k, v := range settings {
+			ansibleConfig[header][k] = v
+		}
+	}
+
+	var ansibleCfgContentBuilder strings.Builder
+	for header, settings := range ansibleConfig {
+		ansibleCfgContentBuilder.WriteString(fmt.Sprintf("[%s]\n", header))
+		for k, v := range settings {
+			ansibleCfgContentBuilder.WriteString(fmt.Sprintf("%s=%s\n", k, v))
+		}
+	}
+
+	var err error
+	if err = ioutil.WriteFile(
+		filepath.Join(ansibleRecipePath, "ansible.cfg"),
+		[]byte(ansibleCfgContentBuilder.String()), 0664); err != nil {
+
+		err = errors.Wrap(err, "Failed to write ansible.cfg file")
+	}
+
+	return err
+}
+
+func getAnsibleConfigFromDefault() map[string]map[string]string {
+	ansibleConfig := make(map[string]map[string]string, len(ansibleDefaultConfig))
+	for k, mapVal := range ansibleDefaultConfig {
+		newVal := make(map[string]string, len(mapVal))
+		for internalK, internalV := range mapVal {
+			newVal[internalK] = internalV
+		}
+		ansibleConfig[k] = newVal
+	}
+	return ansibleConfig
 }

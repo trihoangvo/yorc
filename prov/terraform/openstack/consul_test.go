@@ -17,7 +17,7 @@ package openstack
 import (
 	"testing"
 
-	"github.com/ystia/yorc/v3/testutil"
+	"github.com/ystia/yorc/v4/testutil"
 )
 
 // The aim of this function is to run all package tests with consul server dependency with only one consul server start
@@ -59,6 +59,15 @@ func TestRunConsulOpenstackPackageTests(t *testing.T) {
 		})
 		t.Run("TestGenerateMultipleIP", func(t *testing.T) {
 			testGenerateMultipleIP(t, srv, kv)
+		})
+		t.Run("simpleServerGroup", func(t *testing.T) {
+			testSimpleServerGroup(t, kv)
+		})
+		t.Run("OSInstanceWithServerGroup", func(t *testing.T) {
+			testOSInstanceWithServerGroup(t, kv, srv)
+		})
+		t.Run("TestGenerateTerraformInfo", func(t *testing.T) {
+			testGenerateTerraformInfo(t, srv, kv)
 		})
 	})
 }

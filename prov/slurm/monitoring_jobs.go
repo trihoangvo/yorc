@@ -17,16 +17,28 @@ package slurm
 import (
 	"context"
 	"fmt"
-	"github.com/pkg/errors"
 	"path"
+	"strconv"
 	"strings"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/sshutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/prov"
+	"github.com/pkg/errors"
+
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/helper/sshutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/prov"
+	"github.com/ystia/yorc/v4/prov/scheduling"
 )
+
+const bashLogger = `
+if [ -f %s ]; then
+    tail -n +%d %s
+fi
+
+`
 
 type actionOperator struct {
 }
@@ -96,6 +108,10 @@ func (o *actionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 
 	info, err := getJobInfo(sshClient, actionData.jobID)
 	if err != nil {
+		if isNoJobFoundError(err) {
+			// the job is not found in slurm database (should have been purged) : pass its status to "UNKNOWN"
+			deployments.SetInstanceStateStringWithContextualLogs(ctx, consulutil.GetKV(), deploymentID, action.Data["nodeName"], "0", "UNKNOWN")
+		}
 		return true, errors.Wrapf(err, "failed to get job info with jobID:%q", actionData.jobID)
 	}
 
@@ -110,19 +126,27 @@ func (o *actionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 	stdOut, existStdOut := info["StdOut"]
 	stdErr, existStdErr := info["StdErr"]
 	if existStdOut && existStdErr && stdOut == stdErr {
-		o.logFile(ctx, deploymentID, stdOut, "StdOut/StdErr", sshClient)
+		o.logFile(ctx, cfg, action, deploymentID, stdOut, "StdOut/StdErr", sshClient)
 	} else {
 		if existStdOut {
-			o.logFile(ctx, deploymentID, stdOut, "StdOut", sshClient)
+			o.logFile(ctx, cfg, action, deploymentID, stdOut, "StdOut", sshClient)
 		}
 		if existStdErr {
-			o.logFile(ctx, deploymentID, stdErr, "StdErr", sshClient)
+			o.logFile(ctx, cfg, action, deploymentID, stdErr, "StdErr", sshClient)
 		}
 	}
 
 	// See default output if nothing is specified here
 	if !existStdOut && !existStdErr {
-		o.logFile(ctx, deploymentID, fmt.Sprintf("slurm-%s.out", actionData.jobID), "StdOut/Stderr", sshClient)
+		o.logFile(ctx, cfg, action, deploymentID, fmt.Sprintf("slurm-%s.out", actionData.jobID), "StdOut/Stderr", sshClient)
+	}
+
+	previousJobState, err := deployments.GetInstanceStateString(consulutil.GetKV(), deploymentID, action.Data["nodeName"], "0")
+	if err != nil {
+		return true, errors.Wrapf(err, "failed to get instance state for job %q", actionData.jobID)
+	}
+	if previousJobState != info["JobState"] {
+		deployments.SetInstanceStateStringWithContextualLogs(ctx, consulutil.GetKV(), deploymentID, action.Data["nodeName"], "0", info["JobState"])
 	}
 
 	// See if monitoring must be continued and set job state if terminated
@@ -131,11 +155,15 @@ func (o *actionOperator) monitorJob(ctx context.Context, cfg config.Configuratio
 		// job has been done successfully : unregister monitoring
 		deregister = true
 	case "RUNNING", "PENDING", "COMPLETING", "CONFIGURING", "SIGNALING", "RESIZING":
-		// job's still running or its state is about to be set definitively: monitoring is keeping on
+		// job's still running or its state is about to be set definitively: monitoring is keeping on (deregister stays false)
 	default:
 		// Other cases as FAILED, CANCELLED, STOPPED, SUSPENDED, TIMEOUT, etc : error is return with job state and job info is logged
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelERROR, deploymentID).RegisterAsString(fmt.Sprintf("job info:%+v", info))
 		deregister = true
+		// Log event containing all the slurm information
+
+		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelERROR, deploymentID).RegisterAsString(fmt.Sprintf("job info:%+v", info))
+		// Error to be returned
 		err = errors.Errorf("job with ID:%q finished unsuccessfully with state:%q", actionData.jobID, info["JobState"])
 	}
 
@@ -162,16 +190,51 @@ func (o *actionOperator) removeArtifacts(actionData *actionData, sshClient *sshu
 	}
 }
 
-func (o *actionOperator) logFile(ctx context.Context, deploymentID, filePath, fileType string, sshClient *sshutil.SSHClient) {
-	cmd := fmt.Sprintf("cat %s", filePath)
+func (o *actionOperator) logFile(ctx context.Context, cfg config.Configuration, action *prov.Action, deploymentID, filePath, fileType string, sshClient *sshutil.SSHClient) {
+	fileTypeKey := fmt.Sprintf("lastIndex%s", strings.Replace(fileType, "/", "", -1))
+	// Get the log last index
+	lastInd, err := o.getLogLastIndex(action, fileTypeKey)
+	if err != nil {
+		log.Debugf("fail to get log last index for log file (%s)due to error:%+v:", filePath, err)
+		return
+	}
+
+	cmd := fmt.Sprintf(bashLogger, filePath, lastInd+1, filePath)
 	output, err := sshClient.RunCommand(cmd)
 	if err != nil {
-		mess := fmt.Sprintf("an error:%+v occurred during logging file:%q", err, filePath)
-		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelWARN, deploymentID).RegisterAsString(mess)
+		log.Debugf("fail to log file (%s)due to error:%+v:", filePath, err)
+		return
 	}
 	if strings.TrimSpace(output) != "" {
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelDEBUG, deploymentID).RegisterAsString(fmt.Sprintf("Run the command: %q", cmd))
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).RegisterAsString(fmt.Sprintf("%s %s:", fileType, filePath))
 		events.WithContextOptionalFields(ctx).NewLogEntry(events.LogLevelINFO, deploymentID).RegisterAsString("\n" + output)
 	}
+
+	// Update the last index
+	cc, err := cfg.GetConsulClient()
+	if err != nil {
+		log.Debugf("fail to retrieve consul client due to error:%+v:", err)
+		return
+	}
+
+	newInd := strconv.Itoa(lastInd + strings.Count(output, "\n"))
+	err = scheduling.UpdateActionData(cc, action.ID, fileTypeKey, newInd)
+	if err != nil {
+		log.Debugf("fail to update action data due to error:%+v:", err)
+		return
+	}
+}
+
+func (o *actionOperator) getLogLastIndex(action *prov.Action, fileTypeKey string) (int, error) {
+	lastIndex, ok := action.Data[fileTypeKey]
+	if !ok {
+		return 0, nil
+	}
+
+	lastInd, err := strconv.Atoi(lastIndex)
+	if err != nil {
+		return 0, err
+	}
+	return lastInd, nil
 }

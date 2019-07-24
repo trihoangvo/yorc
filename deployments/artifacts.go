@@ -22,7 +22,7 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/helper/consulutil"
+	"github.com/ystia/yorc/v4/helper/consulutil"
 )
 
 // GetArtifactsForType returns a map of artifact name / artifact file for the given type.
@@ -43,7 +43,12 @@ func GetArtifactsForType(kv *api.KV, deploymentID, typeName string) (map[string]
 	} else {
 		artifacts = make(map[string]string)
 	}
-	artifactsPath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/types", typeName, "artifacts")
+	typePath, err := locateTypePath(kv, deploymentID, typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	artifactsPath := path.Join(typePath, "artifacts")
 	importPath, err := GetTypeImportPath(kv, deploymentID, typeName)
 	if err != nil {
 		return nil, err
@@ -80,15 +85,8 @@ func updateArtifactsFromPath(kv *api.KV, artifacts map[string]string, artifactsP
 	}
 
 	for _, artifactPath := range kvps {
-		kvp, _, err := kv.Get(path.Join(artifactPath, "name"), nil)
-		if err != nil {
-			return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
-		}
-		if kvp == nil || len(kvp.Value) == 0 {
-			return errors.Errorf("Missing mandatory attribute \"name\" for artifact %q", path.Base(artifactPath))
-		}
-		artifactName := string(kvp.Value)
-		kvp, _, err = kv.Get(path.Join(artifactPath, "file"), nil)
+		artifactName := path.Base(artifactPath)
+		kvp, _, err := kv.Get(path.Join(artifactPath, "file"), nil)
 		if err != nil {
 			return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 		}
@@ -104,7 +102,11 @@ func updateArtifactsFromPath(kv *api.KV, artifacts map[string]string, artifactsP
 // GetArtifactTypeExtensions returns the extensions defined in this artifact type.
 // If the artifact doesn't define any extension then a nil slice is returned
 func GetArtifactTypeExtensions(kv *api.KV, deploymentID, artifactType string) ([]string, error) {
-	kvp, _, err := kv.Get(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/types", artifactType, "file_ext"), nil)
+	typePath, err := locateTypePath(kv, deploymentID, artifactType)
+	if err != nil {
+		return nil, err
+	}
+	kvp, _, err := kv.Get(path.Join(typePath, "file_ext"), nil)
 	if err != nil {
 		return nil, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 	}

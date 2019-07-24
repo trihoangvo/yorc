@@ -17,15 +17,17 @@ package ansible
 import (
 	"context"
 	"encoding/json"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/helper/consulutil"
 	"strings"
 
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/prov"
-	"github.com/ystia/yorc/v3/tasks"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/prov"
+	"github.com/ystia/yorc/v4/tasks"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 type actionOperator struct {
@@ -73,11 +75,13 @@ func (o *actionOperator) ExecAction(ctx context.Context, cfg config.Configuratio
 		case "RUNNING", "QUEUED":
 			return false, opErr
 		case "COMPLETED":
+			deployments.SetInstanceStateStringWithContextualLogs(ctx, consulutil.GetKV(), deploymentID, action.Data["nodeName"], "0", tosca.NodeStateStarted.String())
 			return true, opErr
 		case "FAILED":
 			if opErr == nil {
 				opErr = errors.Errorf("job implementation of node %q was detected as failed", nodeName)
 			}
+			deployments.SetInstanceStateStringWithContextualLogs(ctx, consulutil.GetKV(), deploymentID, action.Data["nodeName"], "0", tosca.NodeStateError.String())
 			return true, opErr
 		}
 

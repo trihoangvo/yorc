@@ -23,10 +23,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/helper/collections"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/server"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/helper/collections"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/server"
 )
 
 func init() {
@@ -242,10 +242,6 @@ func initConfig() {
 		})
 	}
 
-	// Deprecate Ansible and Consul flat keys if they are defined in
-	// configuration
-	deprecateFlatKeys(ansibleConfiguration, "ansible")
-	deprecateFlatKeys(consulConfiguration, "consul")
 }
 
 func setConfig() {
@@ -263,6 +259,7 @@ func setConfig() {
 	serverCmd.PersistentFlags().Duration("graceful_shutdown_timeout", config.DefaultServerGracefulShutdownTimeout, "Timeout to  wait for a graceful shutdown of the Yorc server. After this delay the server immediately exits.")
 	serverCmd.PersistentFlags().StringP("resources_prefix", "x", "", "Prefix created resources (like Computes and so on)")
 	serverCmd.PersistentFlags().Duration("wf_step_graceful_termination_timeout", config.DefaultWfStepGracefulTerminationTimeout, "Timeout to wait for a graceful termination of a workflow step during concurrent workflow step failure. After this delay the step is set on error.")
+	serverCmd.PersistentFlags().Duration("purged_deployments_eviction_timeout", config.DefaultPurgedDeploymentsEvictionTimeout, "When a deployment is purged an event is keep to trace that the purge was actually done, this timeout controls the retention time of such events.")
 	serverCmd.PersistentFlags().String("server_id", host, "The server ID used to identify the server node in a cluster.")
 	serverCmd.PersistentFlags().Bool("disable_ssh_agent", false, "Allow disabling ssh-agent use for SSH authentication on provisioned computes. Default is false. If true, compute credentials must provide a path to a private key file instead of key content.")
 
@@ -321,6 +318,7 @@ func setConfig() {
 	viper.BindPFlag("server_graceful_shutdown_timeout", serverCmd.PersistentFlags().Lookup("graceful_shutdown_timeout"))
 	viper.BindPFlag("resources_prefix", serverCmd.PersistentFlags().Lookup("resources_prefix"))
 	viper.BindPFlag("wf_step_graceful_termination_timeout", serverCmd.PersistentFlags().Lookup("wf_step_graceful_termination_timeout"))
+	viper.BindPFlag("purged_deployments_eviction_timeout", serverCmd.PersistentFlags().Lookup("purged_deployments_eviction_timeout"))
 	viper.BindPFlag("server_id", serverCmd.PersistentFlags().Lookup("server_id"))
 	viper.BindPFlag("disable_ssh_agent", serverCmd.PersistentFlags().Lookup("disable_ssh_agent"))
 
@@ -367,6 +365,7 @@ func setConfig() {
 	}
 
 	viper.BindEnv("wf_step_graceful_termination_timeout")
+	viper.BindEnv("purged_deployments_eviction_timeout")
 
 	//Bind Ansible environment variables flags
 	for key := range ansibleConfiguration {
@@ -387,6 +386,7 @@ func setConfig() {
 	viper.SetDefault("resources_prefix", "yorc-")
 	viper.SetDefault("workers_number", config.DefaultWorkersNumber)
 	viper.SetDefault("wf_step_graceful_termination_timeout", config.DefaultWfStepGracefulTerminationTimeout)
+	viper.SetDefault("purged_deployments_eviction_timeout", config.DefaultPurgedDeploymentsEvictionTimeout)
 	viper.SetDefault("server_id", host)
 	viper.SetDefault("disable_ssh_agent", false)
 
@@ -502,37 +502,6 @@ func addServerExtraVaultParam(cfg *config.Configuration, vaultParam string) {
 	paramParts := strings.Split(vaultParam, ".")
 	value := viper.Get(vaultParam)
 	cfg.Vault.Set(paramParts[1], value)
-}
-
-// Deprecate keys still using an old format in viper configuration by defining
-// an alias to the new key, and logging a message describing which keys are
-// deprecated as well as the new format to use.
-func deprecateFlatKeys(configuration map[string]interface{}, configurationName string) {
-
-	var deprecatedMsg string
-	var newValueMsg string
-	msgFlatKeyFormat := "\t%q: %T,\n"
-	msgNestedKeyFormat := "\t" + msgFlatKeyFormat
-
-	for key, defaultValue := range configuration {
-		deprecatedKey := toFlatKey(key)
-		if value := viper.Get(deprecatedKey); value != nil {
-			subkeys := strings.SplitN(key, ".", 2)
-			deprecatedMsg += fmt.Sprintf(msgFlatKeyFormat, deprecatedKey, defaultValue)
-			newValueMsg += fmt.Sprintf(msgNestedKeyFormat, subkeys[1], defaultValue)
-			// Let viper manage the nested key as the primary key,
-			// and the flat key as an alias
-			viper.RegisterAlias(deprecatedKey, key)
-		}
-	}
-
-	if deprecatedMsg != "" {
-		log.Printf("Deprecated values are used in configuration file. The following lines:\n%sshould now have this format:\n\t%q:{\n%s\t}",
-			deprecatedMsg,
-			configurationName,
-			newValueMsg)
-	}
-
 }
 
 // Returns the flat key corresponding to a nested key.

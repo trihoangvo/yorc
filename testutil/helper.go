@@ -23,24 +23,41 @@ import (
 	"github.com/hashicorp/consul/testutil"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/helper/consulutil"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/helper/consulutil"
 )
 
 // NewTestConsulInstance allows to :
 //  - creates and returns a new Consul server and client
 //  - starts a Consul Publisher
+//  - stores common-types to Consul
 // Warning: You need to defer the server stop command in the caller
-func NewTestConsulInstance(t *testing.T) (*testutil.TestServer, *api.Client) {
+func NewTestConsulInstance(t testing.TB) (*testutil.TestServer, *api.Client) {
 	logLevel := "debug"
 	if isCI, ok := os.LookupEnv("CI"); ok && isCI == "true" {
 		logLevel = "warn"
 	}
 
-	srv1, err := testutil.NewTestServerConfig(func(c *testutil.TestServerConfig) {
+	cb := func(c *testutil.TestServerConfig) {
 		c.Args = []string{"-ui"}
 		c.LogLevel = logLevel
-	})
+	}
+	return NewTestConsulInstanceWithConfigAndStore(t, cb)
+}
+
+// NewTestConsulInstanceWithConfigAndStore sets up a consul instance for testing
+func NewTestConsulInstanceWithConfigAndStore(t testing.TB, cb testutil.ServerConfigCallback) (*testutil.TestServer, *api.Client) {
+
+	return NewTestConsulInstanceWithConfig(t, cb, true)
+}
+
+// NewTestConsulInstanceWithConfig sets up a consul instance for testing :
+//  - creates and returns a new Consul server and client
+//  - starts a Consul Publisher
+//  - stores common-types to Consul only if storeCommons bool parameter is true
+// Warning: You need to defer the server stop command in the caller
+func NewTestConsulInstanceWithConfig(t testing.TB, cb testutil.ServerConfigCallback, storeCommons bool) (*testutil.TestServer, *api.Client) {
+	srv1, err := testutil.NewTestServerConfig(cb)
 	if err != nil {
 		t.Fatalf("Failed to create consul server: %v", err)
 	}
@@ -57,10 +74,15 @@ func NewTestConsulInstance(t *testing.T) (*testutil.TestServer, *api.Client) {
 
 	kv := client.KV()
 	consulutil.InitConsulPublisher(cfg.Consul.PubMaxRoutines, kv)
+
+	if storeCommons {
+		storeCommonDefinitions()
+	}
+
 	return srv1, client
 }
 
 // BuildDeploymentID allows to create a deploymentID from the test name value
-func BuildDeploymentID(t *testing.T) string {
+func BuildDeploymentID(t testing.TB) string {
 	return strings.Replace(t.Name(), "/", "_", -1)
 }

@@ -17,13 +17,16 @@ package deployments
 import (
 	"context"
 	"path"
+	"time"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/deployments/internal"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 // SetInstanceStateStringWithContextualLogs stores the state of a given node instance and publishes a status change event
@@ -48,24 +51,68 @@ func SetInstanceStateWithContextualLogs(ctx context.Context, kv *api.KV, deploym
 
 // GetInstanceState retrieves the state of a given node instance
 func GetInstanceState(kv *api.KV, deploymentID, nodeName, instanceName string) (tosca.NodeState, error) {
-	kvp, _, err := kv.Get(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "attributes/state"), nil)
+	stringStateValue, err := GetInstanceStateString(kv, deploymentID, nodeName, instanceName)
 	if err != nil {
-		return tosca.NodeStateError, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+		return tosca.NodeStateError, err
 	}
-	if kvp == nil || len(kvp.Value) == 0 {
-		return tosca.NodeStateError, errors.Errorf("Missing mandatory attribute \"state\" on instance %q for node %q", instanceName, nodeName)
-	}
-	state, err := tosca.NodeStateString(string(kvp.Value))
+	state, err := tosca.NodeStateString(stringStateValue)
 	if err != nil {
 		return tosca.NodeStateError, err
 	}
 	return state, nil
 }
 
+// GetInstanceStateString retrieves the string value of the state attribute of a given node instance
+func GetInstanceStateString(kv *api.KV, deploymentID, nodeName, instanceName string) (string, error) {
+	kvp, _, err := kv.Get(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "attributes/state"), nil)
+	if err != nil {
+		return "", errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+	}
+	if kvp == nil || len(kvp.Value) == 0 {
+		return "", errors.Errorf("Missing mandatory attribute \"state\" on instance %q for node %q", instanceName, nodeName)
+	}
+	return string(kvp.Value), nil
+}
+
 // DeleteInstance deletes the given instance of the given node from the Consul store
 func DeleteInstance(kv *api.KV, deploymentID, nodeName, instanceName string) error {
 	_, err := kv.DeleteTree(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName), nil)
 	return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+}
+
+// DeleteAllInstances deletes all instances of the given node from the Consul store
+func DeleteAllInstances(kv *api.KV, deploymentID, nodeName string) error {
+	_, err := kv.DeleteTree(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName), nil)
+	return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+}
+
+// LookupInstanceAttributeValue executes a lookup to retrieve instance attribute value when attribute can be long to retrieve
+func LookupInstanceAttributeValue(ctx context.Context, kv *api.KV, deploymentID, nodeName, instanceName, attribute string, nestedKeys ...string) (string, error) {
+	log.Debugf("Attribute:%q lookup for deploymentID:%q, node name:%q, instance:%q", attribute, deploymentID, nodeName, instanceName)
+	res := make(chan string, 1)
+	go func() {
+		for {
+			if attr, _ := GetInstanceAttributeValue(kv, deploymentID, nodeName, instanceName, attribute, nestedKeys...); attr != nil && attr.RawString() != "" {
+				if attr != nil && attr.RawString() != "" {
+					res <- attr.RawString()
+					return
+				}
+			}
+
+			select {
+			case <-time.After(1 * time.Second):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	select {
+	case val := <-res:
+		return val, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 // GetInstanceAttributeValue retrieves the given attribute for a node instance
@@ -187,7 +234,7 @@ func SetInstanceListAttributes(attributes []*AttributeData) error {
 func SetInstanceAttributeComplex(deploymentID, nodeName, instanceName, attributeName string, attributeValue interface{}) error {
 	attrPath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "attributes", attributeName)
 	_, errGrp, store := consulutil.WithContext(context.Background())
-	storeComplexType(store, attrPath, attributeValue)
+	internal.StoreComplexType(store, attrPath, attributeValue)
 	err := notifyAndPublishAttributeValueChange(consulutil.GetKV(), deploymentID, nodeName, instanceName, attributeName, attributeValue)
 	if err != nil {
 		return err
@@ -202,7 +249,7 @@ func SetInstanceListAttributesComplex(attributes []*AttributeData) error {
 	_, errGrp, store := consulutil.WithContext(context.Background())
 	for _, attribute := range attributes {
 		attrPath := path.Join(consulutil.DeploymentKVPrefix, attribute.DeploymentID, "topology/instances", attribute.NodeName, attribute.InstanceName, "attributes", attribute.Name)
-		storeComplexType(store, attrPath, attribute.Value)
+		internal.StoreComplexType(store, attrPath, attribute.Value)
 	}
 	for _, attribute := range attributes {
 		err := notifyAndPublishAttributeValueChange(consulutil.GetKV(), attribute.DeploymentID, attribute.NodeName, attribute.InstanceName, attribute.Name, attribute.Value)
@@ -232,7 +279,7 @@ func SetAttributeComplexForAllInstances(kv *api.KV, deploymentID, nodeName, attr
 	}
 	_, errGrp, store := consulutil.WithContext(context.Background())
 	for _, instanceName := range ids {
-		storeComplexType(store, path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "attributes", attributeName), attributeValue)
+		internal.StoreComplexType(store, path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "attributes", attributeName), attributeValue)
 		err = notifyAndPublishAttributeValueChange(kv, deploymentID, nodeName, instanceName, attributeName, attributeValue)
 		if err != nil {
 			return err

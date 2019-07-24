@@ -1,4 +1,4 @@
-// Copyright 2018 Bull S.A.S. Atos Technologies - Bull, Rue Jean Jaures, B.P.68, 78340, Les Clayes-sous-Bois, France.
+// Copyright 2019 Bull S.A.S. Atos Technologies - Bull, Rue Jean Jaures, B.P.68, 78340, Les Clayes-sous-Bois, France.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,19 +38,31 @@ const (
 	UNDEPLOYMENT_FAILED
 	// SCALING_IN_PROGRESS is a DeploymentStatus of type SCALING_IN_PROGRESS
 	SCALING_IN_PROGRESS
+	// UPDATE_IN_PROGRESS is a DeploymentStatus of type UPDATE_IN_PROGRESS
+	UPDATE_IN_PROGRESS
+	// UPDATED is a DeploymentStatus of type UPDATED
+	UPDATED
+	// UPDATE_FAILURE is a DeploymentStatus of type UPDATE_FAILURE
+	UPDATE_FAILURE
+	// PURGED is a DeploymentStatus of type PURGED
+	PURGED
 )
 
-const _DeploymentStatusName = "INITIALDEPLOYMENT_IN_PROGRESSDEPLOYEDUNDEPLOYMENT_IN_PROGRESSUNDEPLOYEDDEPLOYMENT_FAILEDUNDEPLOYMENT_FAILEDSCALING_IN_PROGRESS"
+const _DeploymentStatusName = "INITIALDEPLOYMENT_IN_PROGRESSDEPLOYEDUNDEPLOYMENT_IN_PROGRESSUNDEPLOYEDDEPLOYMENT_FAILEDUNDEPLOYMENT_FAILEDSCALING_IN_PROGRESSUPDATE_IN_PROGRESSUPDATEDUPDATE_FAILUREPURGED"
 
 var _DeploymentStatusMap = map[DeploymentStatus]string{
-	0: _DeploymentStatusName[0:7],
-	1: _DeploymentStatusName[7:29],
-	2: _DeploymentStatusName[29:37],
-	3: _DeploymentStatusName[37:61],
-	4: _DeploymentStatusName[61:71],
-	5: _DeploymentStatusName[71:88],
-	6: _DeploymentStatusName[88:107],
-	7: _DeploymentStatusName[107:126],
+	0:  _DeploymentStatusName[0:7],
+	1:  _DeploymentStatusName[7:29],
+	2:  _DeploymentStatusName[29:37],
+	3:  _DeploymentStatusName[37:61],
+	4:  _DeploymentStatusName[61:71],
+	5:  _DeploymentStatusName[71:88],
+	6:  _DeploymentStatusName[88:107],
+	7:  _DeploymentStatusName[107:126],
+	8:  _DeploymentStatusName[126:144],
+	9:  _DeploymentStatusName[144:151],
+	10: _DeploymentStatusName[151:165],
+	11: _DeploymentStatusName[165:171],
 }
 
 func (i DeploymentStatus) String() string {
@@ -69,6 +81,10 @@ var _DeploymentStatusValue = map[string]DeploymentStatus{
 	_DeploymentStatusName[71:88]:   5,
 	_DeploymentStatusName[88:107]:  6,
 	_DeploymentStatusName[107:126]: 7,
+	_DeploymentStatusName[126:144]: 8,
+	_DeploymentStatusName[144:151]: 9,
+	_DeploymentStatusName[151:165]: 10,
+	_DeploymentStatusName[165:171]: 11,
 }
 
 // ParseDeploymentStatus attempts to convert a string to a DeploymentStatus

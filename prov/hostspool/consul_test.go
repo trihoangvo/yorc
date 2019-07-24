@@ -15,22 +15,36 @@
 package hostspool
 
 import (
+	"context"
+	"strings"
 	"testing"
 
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/testutil"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/testutil"
 )
 
 // The aim of this function is to run all package tests with consul server dependency with only one consul server start
 func TestRunConsulHostsPoolPackageTests(t *testing.T) {
 	srv, client := testutil.NewTestConsulInstance(t)
 	defer srv.Stop()
+	kv := client.KV()
 	log.SetDebug(true)
+
+	deploymentID := strings.Replace(t.Name(), "/", "_", -1)
+	err := deployments.StoreDeploymentDefinition(context.Background(), kv, deploymentID, "testdata/topology_hp_compute.yaml")
+	require.NoError(t, err)
+
 	t.Run("TestConsulManagerAdd", func(t *testing.T) {
 		testConsulManagerAdd(t, client)
 	})
 	t.Run("TestConsulManagerRemove", func(t *testing.T) {
 		testConsulManagerRemove(t, client)
+	})
+	t.Run("TestConsulManagerRemoveHostWithSamePrefix", func(t *testing.T) {
+		testConsulManagerRemoveHostWithSamePrefix(t, client)
 	})
 	t.Run("TestConsulManagerAddLabels", func(t *testing.T) {
 		testConsulManagerAddLabels(t, client)
@@ -79,5 +93,17 @@ func TestRunConsulHostsPoolPackageTests(t *testing.T) {
 	})
 	t.Run("testConsulManagerAddLabelsWithAllocation", func(t *testing.T) {
 		testConsulManagerAddLabelsWithAllocation(t, client)
+	})
+	t.Run("testCreateFiltersFromComputeCapabilities", func(t *testing.T) {
+		testCreateFiltersFromComputeCapabilities(t, kv, deploymentID)
+	})
+	t.Run("testConcurrentExecDelegateShareableHost", func(t *testing.T) {
+		testConcurrentExecDelegateShareableHost(t, srv, client, kv, deploymentID)
+	})
+	t.Run("testFailureExecDelegateShareableHost", func(t *testing.T) {
+		testFailureExecDelegateShareableHost(t, srv, client, kv, deploymentID)
+	})
+	t.Run("testExecDelegateFailure", func(t *testing.T) {
+		testExecDelegateFailure(t, srv, client, kv, deploymentID)
 	})
 }

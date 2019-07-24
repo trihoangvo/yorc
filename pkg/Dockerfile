@@ -7,7 +7,7 @@ ARG TF_GOOGLE_PLUGIN_VERSION
 ARG TF_OPENSTACK_PLUGIN_VERSION
 # Update terraform default when possible
 ENV TERRAFORM_VERSION ${TERRAFORM_VERSION:-0.11.8}
-ENV ANSIBLE_VERSION ${ANSIBLE_VERSION:-2.7.2}
+ENV ANSIBLE_VERSION ${ANSIBLE_VERSION:-2.7.9}
 ENV TF_CONSUL_PLUGIN_VERSION ${TF_CONSUL_PLUGIN_VERSION:-2.1.0}
 ENV TF_AWS_PLUGIN_VERSION ${TF_AWS_PLUGIN_VERSION:-1.36.0}
 ENV TF_GOOGLE_PLUGIN_VERSION ${TF_GOOGLE_PLUGIN_VERSION:-1.18.0}
@@ -18,7 +18,10 @@ ADD rootfs /
 
 # Python is required here as it should not be removed automatically when uninstalling python-dev
 # We do not install the whole docker package we download the package and extract only the client
-RUN apk add --update make openssh-client python python-dev py-pip gcc musl-dev libffi-dev openssl-dev && \
+RUN apk add --update make openssh-client python3 python3-dev gcc musl-dev libffi-dev openssl-dev && \
+    python3 -m ensurepip && \
+    if [ ! -e /usr/bin/pip ]; then ln -s pip3 /usr/bin/pip ; fi && \
+    if [ ! -e /usr/bin/python ]; then ln -sf /usr/bin/python3 /usr/bin/python; fi && \
     mkdir /tmp/docker && apk fetch -o /tmp/docker docker && \
     tar xzf /tmp/docker/*.apk -C / usr/bin/docker && \
     pip install ansible==${ANSIBLE_VERSION} docker-py netaddr jmespath && \

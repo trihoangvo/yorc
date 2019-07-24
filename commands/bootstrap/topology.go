@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -27,15 +28,17 @@ import (
 	"github.com/pkg/errors"
 	yaml "gopkg.in/yaml.v2"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/helper/ziputil"
-	"github.com/ystia/yorc/v3/rest"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/helper/ziputil"
+	"github.com/ystia/yorc/v4/rest"
 )
 
 // AnsibleConfiguration provides Ansible user-defined settings
 type AnsibleConfiguration struct {
 	Version              string
-	PackageRepositoryURL string `yaml:"extra_package_repository_url" mapstructure:"extra_package_repository_url"`
+	PackageRepositoryURL string              `yaml:"extra_package_repository_url" mapstructure:"extra_package_repository_url"`
+	UseOpenSSH           bool                `yaml:"use_openssh,omitempty" mapstructure:"use_openssh" json:"use_open_ssh,omitempty"`
+	Inventory            map[string][]string `yaml:"inventory,omitempty" mapstructure:"inventory"`
 }
 
 // YorcConfiguration provides Yorc user-defined settings
@@ -52,6 +55,7 @@ type YorcConfiguration struct {
 	CAPassPhrase      string `yaml:"ca_passphrase" mapstructure:"ca_passphrase"`
 	DataDir           string `yaml:"data_dir" mapstructure:"data_dir"`
 	WorkersNumber     int    `yaml:"workers_number" mapstructure:"workers_number"`
+	ResourcesPrefix   string `yaml:"resources_prefix" mapstructure:"resources_prefix"`
 }
 
 // YorcPluginConfiguration provides Yorc plugin user-defined settings
@@ -66,6 +70,7 @@ type Alien4CloudConfiguration struct {
 	Protocol    string
 	User        string
 	Password    string
+	ExtraEnv    string `yaml:"extra_env" mapstructure:"extra_env"`
 }
 
 // ConsulConfiguration provides Consul user-defined settings
@@ -139,9 +144,21 @@ func formatAsYAML(data interface{}, indentations int) (string, error) {
 	return result, err
 }
 
-// formatAsformatOnDemandResourceCredsAsYAMLYAML is a function used in
+// formatAsJSON is a function used in templates to output the json representation
+// of a variable
+func formatAsJSON(data interface{}) (string, error) {
+
+	result := ""
+	bSlice, err := json.Marshal(data)
+	if err == nil {
+		result = string(bSlice)
+	}
+	return result, err
+}
+
+// formatOnDemandResourceCredsAsYAML is a function used in
 // on-demand resources templates to output the yaml representation
-// of crednetials
+// of credentials
 func formatOnDemandResourceCredsAsYAML(creds *CredentialsConfiguration, indentations int) (string, error) {
 
 	var onDemandCreds CredentialsConfiguration
@@ -299,6 +316,7 @@ func createFileFromTemplates(templateFileNames []string, templateName, resultFil
 	// Mapping from names to functions of functions referenced in templates
 	fmap := template.FuncMap{
 		"formatAsYAML":                             formatAsYAML,
+		"formatAsJSON":                             formatAsJSON,
 		"formatOnDemandResourceCredsAsYAML":        formatOnDemandResourceCredsAsYAML,
 		"indent":                                   indent,
 		"getFile":                                  getFile,

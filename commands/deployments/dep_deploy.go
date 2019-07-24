@@ -26,9 +26,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
-	"github.com/ystia/yorc/v3/commands/httputil"
-	"github.com/ystia/yorc/v3/helper/ziputil"
-	"github.com/ystia/yorc/v3/rest"
+	"github.com/ystia/yorc/v4/commands/httputil"
+	"github.com/ystia/yorc/v4/helper/ziputil"
+	"github.com/ystia/yorc/v4/rest"
 )
 
 func init() {
@@ -132,10 +132,10 @@ func SubmitCSAR(csarZip []byte, client *httputil.YorcClient, deploymentID string
 		return "", err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != 201 {
+	if response.StatusCode != http.StatusCreated && response.StatusCode != http.StatusOK {
 		// Try to get the reason
 		httputil.PrintErrors(response.Body)
-		return "", errors.Errorf("POST failed: Expecting HTTP Status code 201 got %d, reason %q", response.StatusCode, response.Status)
+		return "", errors.Errorf("POST failed: Expecting HTTP Status code 200 or 201, got %d, reason %q", response.StatusCode, response.Status)
 	}
 	if location := response.Header.Get("Location"); location != "" {
 		return location, nil

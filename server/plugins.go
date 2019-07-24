@@ -17,38 +17,41 @@ package server
 // Initialization imports
 import (
 	// Registering AWS delegate executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/terraform/aws"
+	_ "github.com/ystia/yorc/v4/prov/terraform/aws"
 	// Registering Google Cloud delegate executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/terraform/google"
+	_ "github.com/ystia/yorc/v4/prov/terraform/google"
 	// Registering openstack delegate executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/terraform/openstack"
+	_ "github.com/ystia/yorc/v4/prov/terraform/openstack"
 	// Registering ansible operation executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/ansible"
+	_ "github.com/ystia/yorc/v4/prov/ansible"
 	// Registering kubernetes operation executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/kubernetes"
+	_ "github.com/ystia/yorc/v4/prov/kubernetes"
 	// Registering slurm delegate executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/slurm"
+	_ "github.com/ystia/yorc/v4/prov/slurm"
 	// Registering hosts pool delegate executor in the registry
-	_ "github.com/ystia/yorc/v3/prov/hostspool"
+	_ "github.com/ystia/yorc/v4/prov/hostspool"
 	// Registering builtin Tosca definition files
-	_ "github.com/ystia/yorc/v3/tosca"
+	_ "github.com/ystia/yorc/v4/tosca"
 	// Registering builtin HashiCorp Vault Client Builder
-	_ "github.com/ystia/yorc/v3/vault/hashivault"
+	_ "github.com/ystia/yorc/v4/vault/hashivault"
 	// Registering builtin activity hooks
-	_ "github.com/ystia/yorc/v3/prov/validation"
+	_ "github.com/ystia/yorc/v4/prov/validation"
 )
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+
+	"github.com/ystia/yorc/v4/deployments/store"
 
 	gplugin "github.com/hashicorp/go-plugin"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/plugin"
-	"github.com/ystia/yorc/v3/registry"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/plugin"
+	"github.com/ystia/yorc/v4/registry"
 )
 
 type pluginManager struct {
@@ -93,6 +96,7 @@ func (pm *pluginManager) loadPlugins(cfg config.Configuration) error {
 		}
 	}
 	reg := registry.GetRegistry()
+	ctx := context.Background()
 	for _, pFile := range plugins {
 		log.Debugf("Loading plugin %q...", pFile)
 		// OK the idea here is to _try_ to load the plugin if we can't we give up with this plugin and try the others
@@ -172,7 +176,7 @@ func (pm *pluginManager) loadPlugins(cfg config.Configuration) error {
 			if len(definitions) > 0 {
 				for defName, defContent := range definitions {
 					log.Debugf("Registering TOSCA definition %q into registry for plugin %q", defName, pluginID)
-					reg.AddToscaDefinition(defName, pluginID, defContent)
+					store.CommonDefinition(ctx, defName, pluginID, defContent)
 				}
 			}
 		} else {

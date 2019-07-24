@@ -15,26 +15,31 @@
 package ansible
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path"
 	"regexp"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"text/template"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ystia/yorc/v3/config"
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/prov"
-	"github.com/ystia/yorc/v3/prov/operations"
-	yorc_testutil "github.com/ystia/yorc/v3/testutil"
+	"github.com/ystia/yorc/v4/config"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/prov"
+	"github.com/ystia/yorc/v4/prov/operations"
+	yorc_testutil "github.com/ystia/yorc/v4/testutil"
 )
 
 // From now only WorkingDirectory is necessary for those tests
@@ -108,6 +113,12 @@ func testExecution(t *testing.T, srv1 *testutil.TestServer, kv *api.KV) {
 	})
 	t.Run("testExecutionGenerateOnNode", func(t *testing.T) {
 		testExecutionGenerateOnNode(t, kv, deploymentID, nodeAName, "standard.create")
+	})
+	t.Run("testExecutionGenerateAnsibleConfig", func(t *testing.T) {
+		testExecutionGenerateAnsibleConfig(t)
+	})
+	t.Run("testConcurrentExecutionGenerateAnsibleConfig", func(t *testing.T) {
+		testConcurrentExecutionGenerateAnsibleConfig(t)
 	})
 
 	var operationTestCases = []string{
@@ -257,6 +268,10 @@ func testExecutionGenerateOnNode(t *testing.T, kv *api.KV, deploymentID, nodeNam
   - file: path="{{ ansible_env.HOME}}/tmp/.yorc" state=directory mode=0755
   - copy: src="/path/to/wrapper.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc/wrapper" mode=0744
   - copy: src="/path/to/some.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc" mode=0744
+	- replace:
+			path: "{{ ansible_env.HOME}}/tmp/.yorc/wrapper"
+			regexp: "#!/usr/bin/env python"
+			replace: "#!{{ ansible_python.executable}}"
   - shell: "/bin/bash -l -c {{ ansible_env.HOME}}/tmp/.yorc/wrapper"
 
       environment:
@@ -398,7 +413,10 @@ func testExecutionGenerateOnRelationshipSource(t *testing.T, kv *api.KV, deploym
   - file: path="{{ ansible_env.HOME}}/tmp/.yorc" state=directory mode=0755
   - copy: src="/path/to/wrapper.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc/wrapper" mode=0744
   - copy: src="/path/to/some.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc" mode=0744
-
+	- replace:
+			path: "{{ ansible_env.HOME}}/tmp/.yorc/wrapper"
+			regexp: "#!/usr/bin/env python"
+			replace: "#!{{ ansible_python.executable}}"
   - shell: "/bin/bash -l -c {{ ansible_env.HOME}}/tmp/.yorc/wrapper"
       environment:
         NodeA_0_A1: "/var/www"
@@ -536,8 +554,11 @@ func testExecutionGenerateOnRelationshipTarget(t *testing.T, kv *api.KV, deploym
   tasks:
   - file: path="{{ ansible_env.HOME}}/tmp/.yorc" state=directory mode=0755
   - copy: src="/path/to/wrapper.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc/wrapper" mode=0744
-  - copy: src="/path/to/some.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc" mode=0744
-
+	- copy: src="/path/to/some.sh" dest="{{ ansible_env.HOME}}/tmp/.yorc" mode=0744
+	- replace:
+			path: "{{ ansible_env.HOME}}/tmp/.yorc/wrapper"
+			regexp: "#!/usr/bin/env python"
+			replace: "#!{{ ansible_python.executable}}"
   - shell: "/bin/bash -l -c {{ ansible_env.HOME}}/tmp/.yorc/wrapper"
       environment:
         NodeA_0_A1: "/var/www"
@@ -595,4 +616,186 @@ func testExecutionGenerateOnRelationshipTarget(t *testing.T, kv *api.KV, deploym
 	require.Nil(t, err)
 	t.Log(writer.String())
 	compareStringsIgnoreWhitespace(t, expectedResult, writer.String())
+}
+
+// testConcurrentExecutionGenerateAnsibleConfig tests the concurrent execution
+// of the function generating the ansible configuration file
+func testConcurrentExecutionGenerateAnsibleConfig(t *testing.T) {
+	nbConcurrents := 100
+	var waitGroup sync.WaitGroup
+	errors := make(chan error, nbConcurrents)
+
+	// Additional config parameters to define in Ansible config
+	tunables := make(map[string]string, 1000)
+	for v := 0; v < 1000; v++ {
+		str := strconv.Itoa(v)
+		tunables[str] = str
+	}
+
+	for i := 0; i < nbConcurrents; i++ {
+		waitGroup.Add(1)
+		go routineGenerateAnsibleConfig(t, i, &waitGroup, tunables, errors)
+	}
+	waitGroup.Wait()
+
+	// Check no error occured
+	select {
+	case err := <-errors:
+		require.NoError(t, err, "Unexpected error generating ansible config concurrently")
+	default:
+	}
+
+}
+
+func routineGenerateAnsibleConfig(t *testing.T, id int, waitGroup *sync.WaitGroup,
+	tunables map[string]string, errors chan<- error) {
+
+	defer waitGroup.Done()
+
+	tempdir, err := ioutil.TempDir("", path.Base(t.Name()+strconv.Itoa(id)))
+	if err != nil {
+		fmt.Printf("Concurrent %d failed to to create temporary directory\n", id)
+		errors <- err
+		return
+	}
+	defer os.RemoveAll(tempdir)
+
+	ansibleAdditionalConfig := map[string]map[string]string{
+		ansibleInventoryHostsHeader: tunables,
+	}
+
+	yorcConfig := config.Configuration{
+		WorkingDirectory: tempdir,
+		Ansible: config.Ansible{
+			Config: ansibleAdditionalConfig,
+		},
+	}
+	execution := &executionCommon{cfg: yorcConfig}
+	err = execution.generateAnsibleConfigurationFile("ansiblePath", tempdir)
+
+	if err != nil {
+		fmt.Printf("Concurrent %d failed to generateAnsibleConfigurationFile\n", id)
+		errors <- err
+	}
+
+}
+
+func testExecutionGenerateAnsibleConfig(t *testing.T) {
+
+	// Create a temporary directory where to create the ansible config file
+	tempdir, err := ioutil.TempDir("", path.Base(t.Name()))
+	require.NoError(t, err, "Failed to create temporary directory")
+	defer os.RemoveAll(tempdir)
+
+	// First test with no ansible config settings in Yorc server configuration
+	yorcConfig := config.Configuration{
+		WorkingDirectory: tempdir,
+	}
+
+	execution := &executionCommon{
+		cfg: yorcConfig}
+
+	err = execution.generateAnsibleConfigurationFile("ansiblePath", yorcConfig.WorkingDirectory)
+	require.NoError(t, err, "Error generating ansible config file")
+
+	cfgPath := path.Join(yorcConfig.WorkingDirectory, "ansible.cfg")
+	resultMap, content := readAnsibleConfigSettings(t, cfgPath)
+
+	// An additional entry for retry_files_save_path should be added to default
+	// values
+	assert.Equal(t,
+		len(ansibleDefaultConfig[ansibleConfigDefaultsHeader])+1,
+		len(resultMap[ansibleConfigDefaultsHeader]),
+		"Missing entries in ansible config file, content: %q", content)
+
+	for k, v := range ansibleDefaultConfig[ansibleConfigDefaultsHeader] {
+		assert.Equal(t, resultMap[ansibleConfigDefaultsHeader][k], v,
+			"Wrong ansible config value for %s", k)
+	}
+	v, ok := resultMap[ansibleConfigDefaultsHeader]["retry_files_save_path"]
+	assert.True(t, ok, "Found no entry for retry_files_save_path in ansible config")
+	assert.Equal(t, tempdir, v, "Unexpected value for retry_files_save_path value")
+
+	// Test enabling fact caching, it should add configuration settings
+	execution.CacheFacts = true
+	initialConfigMapLength := len(ansibleDefaultConfig[ansibleConfigDefaultsHeader])
+	err = execution.generateAnsibleConfigurationFile("ansiblePath", yorcConfig.WorkingDirectory)
+	require.NoError(t, err, "Error generating ansible config file")
+	resultMap, content = readAnsibleConfigSettings(t, cfgPath)
+	assert.Equal(t,
+		initialConfigMapLength+len(ansibleFactCaching)+1,
+		len(resultMap[ansibleConfigDefaultsHeader]),
+		"Missing entries in ansible config file with fact caching, content: %q", content)
+
+	// Test with ansible config settings in Yorc server configuration
+	// one of them overriding Yorc default ansible config setting
+	newSettingName := "special_context_filesystems"
+	newSettingValue := "nfs,vboxsf,fuse,ramfs,myspecialfs"
+	overridenSettingName := "timeout"
+	overridenSettingValue := "60"
+
+	yorcConfig.Ansible.Config = map[string]map[string]string{
+		ansibleConfigDefaultsHeader: map[string]string{
+			newSettingName:       newSettingValue,
+			overridenSettingName: overridenSettingValue,
+		},
+	}
+
+	execution = &executionCommon{
+		cfg: yorcConfig}
+
+	err = execution.generateAnsibleConfigurationFile("ansiblePath", yorcConfig.WorkingDirectory)
+	require.NoError(t, err, "Error generating ansible config file")
+
+	resultMap, content = readAnsibleConfigSettings(t, cfgPath)
+
+	assert.Equal(t,
+		initialConfigMapLength+2,
+		len(resultMap[ansibleConfigDefaultsHeader]),
+		"Missing entries in ansible config file with user-defined values, content: %q", content)
+
+	assert.Equal(t, newSettingValue, resultMap[ansibleConfigDefaultsHeader][newSettingName], "Wrong ansible config value for %s", newSettingName)
+	assert.Equal(t, overridenSettingValue, resultMap[ansibleConfigDefaultsHeader][overridenSettingName], "Wrong ansible config value for %s", overridenSettingName)
+
+}
+
+func readAnsibleConfigSettings(t *testing.T, filepath string) (map[string]map[string]string, string) {
+	cfgFile, err := os.Open(filepath)
+	require.NoError(t, err, "Failed to open ansible config file at %s", filepath)
+	defer cfgFile.Close()
+
+	scanner := bufio.NewScanner(cfgFile)
+	resultMap := make(map[string]map[string]string)
+	var fileContentBuider strings.Builder
+	header := ""
+	for scanner.Scan() {
+		line := scanner.Text()
+		fileContentBuider.WriteString(line)
+		fileContentBuider.WriteString("\n")
+		if squareBrackerIndex := strings.Index(line, "]"); squareBrackerIndex >= 0 {
+			header = strings.TrimSpace(line[1:squareBrackerIndex])
+			resultMap[header] = make(map[string]string)
+		}
+
+		if header == "" {
+			continue
+		}
+
+		if equalIndex := strings.Index(line, "="); equalIndex >= 0 {
+			if key := strings.TrimSpace(line[:equalIndex]); len(key) > 0 {
+				fmt.Printf("key .%s.\n", key)
+				value := ""
+				if len(line) > equalIndex {
+					value = strings.TrimSpace(line[equalIndex+1:])
+				}
+				fmt.Printf("value .%s.\n", value)
+				resultMap[header][key] = value
+			}
+		}
+	}
+
+	err = scanner.Err()
+	require.NoError(t, err, "Error reading ansible config file")
+
+	return resultMap, fileContentBuider.String()
 }

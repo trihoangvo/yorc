@@ -23,10 +23,11 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/deployments/internal"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 // HasScalableCapability check if the given nodeName in the specified deployment, has in this capabilities a Key named scalable
@@ -48,7 +49,10 @@ func TypeHasCapability(kv *api.KV, deploymentID, typeName, capabilityTypeName st
 // GetCapabilitiesOfType returns names of all capabilities in a given type hierarchy that derives from a given capability type
 func GetCapabilitiesOfType(kv *api.KV, deploymentID, typeName, capabilityTypeName string) ([]string, error) {
 	capabilities := make([]string, 0)
-	typePath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology", "types", typeName)
+	typePath, err := locateTypePath(kv, deploymentID, typeName)
+	if err != nil {
+		return capabilities, err
+	}
 	capabilitiesKeys, _, err := kv.Keys(typePath+"/capabilities/", "/", nil)
 	if err != nil {
 		return capabilities, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
@@ -89,6 +93,33 @@ func GetCapabilitiesOfType(kv *api.KV, deploymentID, typeName, capabilityTypeNam
 	return capabilities, nil
 }
 
+// GetCapabilityPropertyType retrieves the type for a given property in a given node capability
+// It returns false if there is no such property
+func GetCapabilityPropertyType(kv *api.KV, deploymentID, nodeName, capabilityName,
+	propertyName string) (bool, string, error) {
+
+	capabilityType, err := GetNodeCapabilityType(kv, deploymentID, nodeName, capabilityName)
+	if err != nil {
+		return false, "", err
+	}
+	var propDataType string
+	var hasProp bool
+	if capabilityType != "" {
+		hasProp, err = TypeHasProperty(kv, deploymentID, capabilityType, propertyName, true)
+		if err != nil {
+			return false, "", err
+		}
+		if hasProp {
+			propDataType, err = GetTypePropertyDataType(kv, deploymentID, capabilityType, propertyName)
+			if err != nil {
+				return true, "", err
+			}
+		}
+	}
+
+	return hasProp, propDataType, err
+}
+
 // GetCapabilityPropertyValue retrieves the value for a given property in a given node capability
 //
 // It returns true if a value is found false otherwise as first return parameter.
@@ -99,19 +130,10 @@ func GetCapabilityPropertyValue(kv *api.KV, deploymentID, nodeName, capabilityNa
 		return nil, err
 	}
 
-	var propDataType string
-	var hasProp bool
-	if capabilityType != "" {
-		hasProp, err = TypeHasProperty(kv, deploymentID, capabilityType, propertyName, true)
-		if err != nil {
-			return nil, err
-		}
-		if hasProp {
-			propDataType, err = GetTypePropertyDataType(kv, deploymentID, capabilityType, propertyName)
-			if err != nil {
-				return nil, err
-			}
-		}
+	hasProp, propDataType, err := GetCapabilityPropertyType(kv, deploymentID, nodeName,
+		capabilityName, propertyName)
+	if err != nil {
+		return nil, err
 	}
 
 	capPropPath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/nodes", nodeName, "capabilities", capabilityName, "properties", propertyName)
@@ -279,44 +301,50 @@ func GetInstanceCapabilityAttributeValue(kv *api.KV, deploymentID, nodeName, ins
 		}
 	}
 
-	isEndpoint, err := IsTypeDerivedFrom(kv, deploymentID, capabilityType,
-		tosca.EndpointCapability)
-	if err != nil {
-		return nil, err
-	}
+	if capabilityType != "" {
+		isEndpoint, err := IsTypeDerivedFrom(kv, deploymentID, capabilityType,
+			tosca.EndpointCapability)
+		if err != nil {
+			return nil, err
+		}
 
-	// TOSCA specification at :
-	// http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#DEFN_TYPE_CAPABILITIES_ENDPOINT
-	// describes that the ip_address attribute of an endpoint is the IP address
-	// as propagated up by the associated node’s host (Compute) container.
-	if isEndpoint && attributeName == "ip_address" && host != "" {
-		result, err = getIPAddressFromHost(kv, deploymentID, host,
-			hostInstance, nodeName, instanceName, capabilityName)
-		if err != nil || result != nil {
-			return result, err
+		// TOSCA specification at :
+		// http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#DEFN_TYPE_CAPABILITIES_ENDPOINT
+		// describes that the ip_address attribute of an endpoint is the IP address
+		// as propagated up by the associated node’s host (Compute) container.
+		if isEndpoint && attributeName == tosca.EndpointCapabilityIPAddressAttribute && host != "" {
+			result, err = getIPAddressFromHost(kv, deploymentID, host,
+				hostInstance, nodeName, instanceName, capabilityName)
+			if err != nil || result != nil {
+				return result, err
+			}
 		}
 	}
-
 	// If still not found check properties as the spec states "TOSCA orchestrators will automatically reflect (i.e., make available) any property defined on an entity making it available as an attribute of the entity with the same name as the property."
 	return GetCapabilityPropertyValue(kv, deploymentID, nodeName, capabilityName, attributeName, nestedKeys...)
 }
 
-func getIPAddressFromHost(kv *api.KV, deploymentID, hostName, hostInstance,
-	nodeName, instanceName, capabilityName string) (*TOSCAValue, error) {
-
+func getEndpointCapabilitityHostIPAttributeNameAndNetName(kv *api.KV, deploymentID, nodeName, capabilityName string) (string, *TOSCAValue, error) {
 	// First check the network name in the capability property to find the right
 	// IP address attribute (default: private address)
 	ipAddressAttrName := "private_address"
 
 	netName, err := GetCapabilityPropertyValue(kv, deploymentID, nodeName, capabilityName, "network_name")
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
 	if netName != nil && strings.ToLower(netName.RawString()) == "public" {
 		ipAddressAttrName = "public_address"
 	}
+	return ipAddressAttrName, netName, nil
+}
 
+func getIPAddressFromHost(kv *api.KV, deploymentID, hostName, hostInstance, nodeName, instanceName, capabilityName string) (*TOSCAValue, error) {
+	ipAddressAttrName, netName, err := getEndpointCapabilitityHostIPAttributeNameAndNetName(kv, deploymentID, nodeName, capabilityName)
+	if err != nil {
+		return nil, err
+	}
 	result, err := GetInstanceAttributeValue(kv, deploymentID, hostName, hostInstance,
 		ipAddressAttrName)
 
@@ -353,7 +381,7 @@ func SetInstanceCapabilityAttribute(deploymentID, nodeName, instanceName, capabi
 func SetInstanceCapabilityAttributeComplex(deploymentID, nodeName, instanceName, capabilityName, attributeName string, attributeValue interface{}) error {
 	attrPath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "capabilities", capabilityName, "attributes", attributeName)
 	_, errGrp, store := consulutil.WithContext(context.Background())
-	storeComplexType(store, attrPath, attributeValue)
+	internal.StoreComplexType(store, attrPath, attributeValue)
 	err := notifyAndPublishCapabilityAttributeValueChange(consulutil.GetKV(), deploymentID, nodeName, instanceName, capabilityName, attributeName, attributeValue)
 	if err != nil {
 		return err
@@ -381,7 +409,7 @@ func SetCapabilityAttributeComplexForAllInstances(kv *api.KV, deploymentID, node
 	_, errGrp, store := consulutil.WithContext(context.Background())
 	for _, instanceName := range ids {
 		attrPath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/instances", nodeName, instanceName, "capabilities", capabilityName, "attributes", attributeName)
-		storeComplexType(store, attrPath, attributeValue)
+		internal.StoreComplexType(store, attrPath, attributeValue)
 		err = notifyAndPublishCapabilityAttributeValueChange(kv, deploymentID, nodeName, instanceName, capabilityName, attributeName, attributeValue)
 		if err != nil {
 			return err
@@ -407,8 +435,11 @@ func GetNodeCapabilityType(kv *api.KV, deploymentID, nodeName, capabilityName st
 // It explores the type hierarchy (derived_from) to found the given capability.
 // It may return an empty string if the capability is not found in the type hierarchy
 func GetNodeTypeCapabilityType(kv *api.KV, deploymentID, nodeType, capabilityName string) (string, error) {
-
-	kvp, _, err := kv.Get(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/types", nodeType, "capabilities", capabilityName, "type"), nil)
+	typePath, err := locateTypePath(kv, deploymentID, nodeType)
+	if err != nil {
+		return "", err
+	}
+	kvp, _, err := kv.Get(path.Join(typePath, "capabilities", capabilityName, "type"), nil)
 	if err != nil {
 		return "", errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 	}
@@ -429,7 +460,11 @@ func GetNodeTypeCapabilityType(kv *api.KV, deploymentID, nodeType, capabilityNam
 //
 // It explores the type hierarchy (derived_from) to found the given capability.
 func GetNodeTypeCapabilityPropertyValue(kv *api.KV, deploymentID, nodeType, capabilityName, propertyName, propDataType string, nestedKeys ...string) (*TOSCAValue, error) {
-	capPropPath := path.Join(consulutil.DeploymentKVPrefix, deploymentID, "topology/types", nodeType, "capabilities", capabilityName, "properties", propertyName)
+	typePath, err := locateTypePath(kv, deploymentID, nodeType)
+	if err != nil {
+		return nil, err
+	}
+	capPropPath := path.Join(typePath, "capabilities", capabilityName, "properties", propertyName)
 	result, err := getValueAssignmentWithDataType(kv, deploymentID, capPropPath, "", "", "", propDataType, nestedKeys...)
 	if err != nil || result != nil {
 		return result, errors.Wrapf(err, "Failed to get property %q for capability %q on node type %q", propertyName, capabilityName, nodeType)
@@ -463,4 +498,15 @@ func notifyAndPublishCapabilityAttributeValueChange(kv *api.KV, deploymentID, no
 		CapabilityName: capabilityName,
 	}
 	return an.NotifyValueChange(kv, deploymentID)
+}
+
+func isNodeCapabilityOfType(kv *api.KV, deploymentID, nodeName, capabilityName, derives string) (bool, error) {
+	capType, err := GetNodeCapabilityType(kv, deploymentID, nodeName, capabilityName)
+	if err != nil {
+		return false, err
+	}
+	if capType == "" {
+		return false, nil
+	}
+	return IsTypeDerivedFrom(kv, deploymentID, capType, derives)
 }

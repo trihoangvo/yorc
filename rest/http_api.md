@@ -24,7 +24,9 @@ In this case you should use a `POST` method.
 In this case you should use a `PUT` method. There are some constraints on submitting a deployment with a given ID:
 
 * This ID should respect the following format: `^[-_0-9a-zA-Z]+$` and be less than 36 characters long (otherwise a `400 BadRequest` error is returned)
-* This ID should not already be in used (otherwise a `409 Conflict` error is returned)
+* If this ID  is already in use, the behavior depends on the Yorc version, premium or open source :
+  * in the premium version, a deployment update will be performed as described in next section below,
+  * in the open source version, a `409 Conflict` error is returned.
 
 `PUT /deployments/<deployment_id>`
 
@@ -42,6 +44,31 @@ This endpoint produces no content except in case of error.
 
 A critical note is that the deployment is proceeded asynchronously and a success only guarantees that the deployment is successfully
 **submitted**.
+
+### Update a deployment (premium feature) <a name="update-csar"></a>
+
+Updates a deployment by uploading an updated CSAR. 'Content-Type' header should be set to 'application/zip'.
+
+`PUT /deployments/<deployment_id>`
+
+If the given ID doesn't correspond to the ID of an existing deployment, this call
+won't perform an update, but will create a new deployment as described in the previous section.
+
+**Result**:
+
+A successfully submitted deployment update will result in an HTTP status code 200.
+There won't be any 'Location' header relative to the base URI indicating a task URI
+handling the update process, as the current implementation only supports the update
+of Workflows, which is performed synchronously.
+
+```HTTP
+HTTP/1.1 200 OK
+Content-Length: 0
+```
+
+This endpoint produces no content except in case of error.
+As the ability to update a deployment is a premium feature, attempting to perform
+a deployment update using the open source version of Yorc will return the error `409 Conflict`.
 
 ### List deployments <a name="list-deps"></a>
 
@@ -77,8 +104,9 @@ Content-Type: application/json
 ### Undeploy  an active deployment <a name="undeploy"></a>
 
 Undeploy a deployment. By adding the optional 'purge' url parameter to your request you will suppress any reference to this deployment from the yorc database at the end of the undeployment. A successful call to this endpoint results in a HTTP status code 202 with a 'Location' header relative to the base URI indicating the task URI handling the undeployment process.
+By adding the optional 'stopOnError' url parameter to your request, the un-deployment will stop at the first encountered error. Otherwise, it will continue until the end.
 
-`DELETE /deployments/<deployment_id>[?purge]`
+`DELETE /deployments/<deployment_id>[?purge]&[stopOnError]`
 
 **Response**:
 
@@ -184,7 +212,8 @@ Content-Type: application/json
 
 ### Get the deployment information about a given node instance <a name="instance-info"></a>
 
-Retrieve the node instance status and the list (as Atom links) of the attributes for this instance.
+Retrieve a node instance's status.
+Get the list (as Atom links) of the attributes for this instance.
 
 'Accept' header should be set to 'application/json'.
 
@@ -556,8 +585,9 @@ Content-Length: 0
 
 ### Resume a task <a name="task-resume"></a>
 
-Resume a task for a given deployment. The task should be in status "FAILED" to be resumed otherwise an HTTP 400
-(Bad request) error is returned.
+Resume a task for a given deployment.
+The task should be in status "FAILED" to be resumed.
+Otherwise an HTTP 400 (Bad request) error is returned.
 
 `PUT    /deployments/<deployment_id>/tasks/<taskId>`
 
@@ -571,11 +601,17 @@ Content-Length: 0
 ### Execute a custom command <a name="custom-cmd-exec"></a>
 
 Submit a custom command for a given deployment.
+
+The command corresponds to an operation defined in a node type interface.
+The operation is executed by default on all the node type instances.
+It can also be applied to a selected subset of instances.
+For that, the list of instance identifiers must provided in the request body.
+
 'Content-Type' header should be set to 'application/json'.
 
 `POST    /deployments/<deployment_id>/custom`
 
-Request body:
+Request body allowing to execute command on all the node instances:
 
 ```json
 {
@@ -589,7 +625,20 @@ Request body:
 }
 ```
 
-If omitted interface defaults to `custom`.
+Request body allowing to execute command on some selected node instances:
+
+```json
+{
+    "node": "NodeName",
+    "name": "Custom_Command_Name",
+    "interface": "fully.qualified.interface.name",
+    "instances": [ "0", "1" ],
+    "inputs": {
+      "index":"",
+      "nb_replicas":"2"
+    }
+}
+```
 
 **Response**:
 
@@ -628,10 +677,28 @@ This endpoint will failed with an error "400 Bad Request" if:
 
 ### Execute a workflow <a name="workflow-exec"></a>
 
-Submit a custom workflow for a given deployment. By adding the optional 'continueOnError' url parameter to your request workflow will
-not stop at the first encountered error and will run to its end.
+Submit a custom workflow for a given deployment.
+By adding the optional 'continueOnError' url parameter to your request, 
+workflow will not stop at the first encountered error and will run to its end.
+
+By default the execution of the workflow's steps take place on all the instances of the workflow's nodes.
+It is possible to select instances for the workflow's nodes by adding selection data in the request body.
+For nodes that have no selected instances specified, the execution steps take place on all instances.
 
 `POST /deployments/<deployment_id>/workflows/<workflow_name>[?continueOnError]`
+
+Request body allowing to execute a workflow's steps on selected node instances :
+
+```json
+{
+    "nodeinstances": [
+       {
+         "node": "Node_Name",
+         "instances": [ "0", "2" ]
+       }
+    ]
+}
+```
 
 A successfully submitted workflow result in an HTTP status code 201 with a 'Location' header relative to the base URI indicating
 the URI of the task handling this workflow execution.

@@ -25,3 +25,67 @@ const RunnableRunOperationName = RunnableInterfaceName + ".run"
 
 // RunnableCancelOperationName is the fully qualified name of the Cancel operation
 const RunnableCancelOperationName = RunnableInterfaceName + ".cancel"
+
+// StandardInterfaceName is the fully qualified name of the Standard interface
+const StandardInterfaceName = "tosca.interfaces.node.lifecycle.standard"
+
+// StandardInterfaceShortName is the short name of the Standard interface
+const StandardInterfaceShortName = "standard"
+
+// ConfigureInterfaceName is the fully qualified name of the Configure interface
+const ConfigureInterfaceName = "tosca.interfaces.relationships.configure"
+
+// ConfigureInterfaceShortName is the short name of the Configure interface
+const ConfigureInterfaceShortName = "configure"
+
+// EndpointCapabilityIPAddressAttribute is the name of the attribute containing the ip_address or
+// DNS name of tosca.capabilities.Endpoint
+//
+// See http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#DEFN_TYPE_CAPABILITIES_ENDPOINT
+const EndpointCapabilityIPAddressAttribute = "ip_address"
+
+// EndpointCapabilityPortProperty is the name of the property containing the port
+// of the endpoint
+//
+// See http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#DEFN_TYPE_CAPABILITIES_ENDPOINT
+const EndpointCapabilityPortProperty = "port"
+
+// ComputeNodeEndpointCapabilityName is the name of the administrator network
+// endpoint capability of a Compute Node
+const ComputeNodeEndpointCapabilityName = "endpoint"
+
+// ComputeNodePublicAddressAttributeName is the attribute name of the primary
+// public IP address assigned to a Compute Node
+//
+// See http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#_Toc379455082
+const ComputeNodePublicAddressAttributeName = "public_address"
+
+// ComputeNodePrivateAddressAttributeName is the attribute name of the primary
+// private IP address assigned to a Compute Node
+//
+// See http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#_Toc379455082
+const ComputeNodePrivateAddressAttributeName = "private_address"
+
+// ComputeNodeNetworksAttributeName is the attribute name of the list of
+// logical networks assigned to a Compute Node
+//
+// See http://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/TOSCA-Simple-Profile-YAML-v1.2.html#_Toc379455082
+const ComputeNodeNetworksAttributeName = "networks"
+
+// NetworkNameProperty is the name of the property containing the name of a logical
+// network
+//
+// See https://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/os/TOSCA-Simple-Profile-YAML-v1.2-os.html#TYPE_TOSCA_DATA_NETWORKINFO
+const NetworkNameProperty = "network_name"
+
+// NetworkIDProperty is the name of the property containing the unique ID of a
+// network
+//
+// See https://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/os/TOSCA-Simple-Profile-YAML-v1.2-os.html#TYPE_TOSCA_DATA_NETWORKINFO
+const NetworkIDProperty = "network_id"
+
+// NetworkAddressesProperty is the name of the property containing the list of
+// IP addresses assigned from the underlying network
+//
+// See https://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.2/os/TOSCA-Simple-Profile-YAML-v1.2-os.html#TYPE_TOSCA_DATA_NETWORKINFO
+const NetworkAddressesProperty = "addresses"

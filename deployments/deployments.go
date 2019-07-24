@@ -19,14 +19,19 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
+
+	"github.com/ystia/yorc/v4/helper/collections"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
 )
+
+const purgedDeploymentsLock = consulutil.PurgedDeploymentKVPrefix + ".lock"
 
 type deploymentNotFound struct {
 	deploymentID string
@@ -41,6 +46,26 @@ func IsDeploymentNotFoundError(err error) bool {
 	cause := errors.Cause(err)
 	_, ok := cause.(deploymentNotFound)
 	return ok
+}
+
+type inconsistentDeploymentError struct {
+	deploymentID string
+}
+
+func (t inconsistentDeploymentError) Error() string {
+	return fmt.Sprintf("Inconsistent deployment with ID %q", t.deploymentID)
+}
+
+// IsInconsistentDeploymentError checks if an error is an inconsistent deployment error
+func IsInconsistentDeploymentError(err error) bool {
+	cause := errors.Cause(err)
+	_, ok := cause.(inconsistentDeploymentError)
+	return ok
+}
+
+// NewInconsistentDeploymentError allows to create a new inconsistentDeploymentError error
+func NewInconsistentDeploymentError(deploymentID string) error {
+	return inconsistentDeploymentError{deploymentID: deploymentID}
 }
 
 // DeploymentStatusFromString returns a DeploymentStatus from its textual representation.
@@ -118,28 +143,134 @@ RETRY:
 		return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 	}
 
-	if kvp == nil || len(kvp.Value) == 0 || meta == nil {
-		return errors.WithStack(&deploymentNotFound{deploymentID})
+	if status != INITIAL {
+		if kvp == nil || len(kvp.Value) == 0 || meta == nil {
+			return errors.WithStack(&deploymentNotFound{deploymentID})
+		}
+
+		currentStatus, err := DeploymentStatusFromString(string(kvp.Value), true)
+		if err != nil {
+			return err
+		}
+
+		if status != currentStatus {
+			kvp.Value = []byte(status.String())
+			kvp.ModifyIndex = meta.LastIndex
+			ok, _, err := kv.CAS(kvp, nil)
+			if err != nil {
+				return errors.Wrapf(err, "Failed to set deployment status to %q for deploymentID:%q", status.String(), deploymentID)
+			}
+			if !ok {
+				goto RETRY
+			}
+			log.Debugf("Deployment status change for %s from %s to %s",
+				deploymentID, currentStatus.String(), status.String())
+			events.PublishAndLogDeploymentStatusChange(ctx, kv, deploymentID, strings.ToLower(status.String()))
+		}
+		return nil
 	}
 
-	currentStatus, err := DeploymentStatusFromString(string(kvp.Value), true)
+	// Set the status to INITIAL: no need to handle concurrency and to check previous status
+	if err = consulutil.StoreConsulKeyAsString(path.Join(consulutil.DeploymentKVPrefix, deploymentID, "status"), status.String()); err != nil {
+		return errors.Wrapf(err, "Failed to set deployment status to %q for deploymentID:%q", status.String(), deploymentID)
+	}
+	events.PublishAndLogDeploymentStatusChange(ctx, kv, deploymentID, strings.ToLower(status.String()))
+	return nil
+}
+
+// TagDeploymentAsPurged registers current purge time and emit a deployment status change event and a log for the given deployment
+//
+// The timestamp will be used to evict purged deployments after an given delay.
+func TagDeploymentAsPurged(ctx context.Context, cc *api.Client, deploymentID string) error {
+	lock, _, err := acquirePurgedDeploymentsLock(ctx, cc)
 	if err != nil {
 		return err
 	}
+	defer lock.Unlock()
+	consulutil.StoreConsulKeyAsString(path.Join(consulutil.PurgedDeploymentKVPrefix, deploymentID), time.Now().Format(time.RFC3339Nano))
 
-	if status != currentStatus {
-		kvp.Value = []byte(status.String())
-		kvp.ModifyIndex = meta.LastIndex
-		ok, _, err := kv.CAS(kvp, nil)
+	// Just Publish an event that the deployment is successfully
+	// This event will stay into consul even if the deployment is actually purged...
+	// To prevent unexpected errors
+	_, err = events.PublishAndLogDeploymentStatusChange(ctx, cc.KV(), deploymentID, strings.ToLower(PURGED.String()))
+	return err
+}
+
+// CleanupPurgedDeployments definitively removes purged deployments
+//
+// Deployment are cleaned-up if they have been purged for at least evictionTimeout or
+// if the are in the extraDeployments list
+func CleanupPurgedDeployments(ctx context.Context, cc *api.Client, evictionTimeout time.Duration, extraDeployments ...string) error {
+	lock, _, err := acquirePurgedDeploymentsLock(ctx, cc)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	kvpList, _, err := cc.KV().List(consulutil.PurgedDeploymentKVPrefix, nil)
+	if err != nil {
+		return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+	}
+	for _, kvp := range kvpList {
+		if kvp.Key == purgedDeploymentsLock {
+			// ignore lock
+			continue
+		}
+		deploymentID := path.Base(kvp.Key)
+		if collections.ContainsString(extraDeployments, deploymentID) {
+			err = cleanupPurgedDeployment(ctx, cc.KV(), deploymentID)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		purgeDate, err := time.Parse(time.RFC3339Nano, string(kvp.Value))
 		if err != nil {
-			return errors.Wrapf(err, "Failed to set deployment status to %q for deploymentID:%q", status.String(), deploymentID)
+			log.Printf("WARN failed to parse %q for purged timestamp of deployment %q", string(kvp.Value), deploymentID)
+			continue
 		}
-		if !ok {
-			goto RETRY
+		if purgeDate.Add(evictionTimeout).Before(time.Now()) {
+			err = cleanupPurgedDeployment(ctx, cc.KV(), deploymentID)
+			if err != nil {
+				return err
+			}
+			continue
 		}
-		log.Debugf("Deployment status change for %s from %s to %s",
-			deploymentID, currentStatus.String(), status.String())
-		events.PublishAndLogDeploymentStatusChange(ctx, kv, deploymentID, strings.ToLower(status.String()))
 	}
 	return nil
+}
+
+func cleanupPurgedDeployment(ctx context.Context, kv *api.KV, deploymentID string) error {
+	// Delete events & logs tree corresponding to the deployment
+	// This is useful when redeploying an application that has been previously purged
+	// as it may still have the purged event and log.
+	err := events.PurgeDeploymentEvents(kv, deploymentID)
+	if err != nil {
+		return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+	}
+	err = events.PurgeDeploymentLogs(kv, deploymentID)
+	if err != nil {
+		return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+	}
+	_, err = kv.Delete(path.Join(consulutil.PurgedDeploymentKVPrefix, deploymentID), nil)
+	return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+}
+
+func acquirePurgedDeploymentsLock(ctx context.Context, cc *api.Client) (*api.Lock, <-chan struct{}, error) {
+	lock, err := cc.LockKey(purgedDeploymentsLock)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+	}
+	var leaderCh <-chan struct{}
+	for leaderCh == nil {
+		leaderCh, err = lock.Lock(ctx.Done())
+		if err != nil {
+			return nil, nil, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, errors.Wrap(ctx.Err(), "failed to acquire lock on purged deployments")
+		default:
+		}
+	}
+	return lock, leaderCh, nil
 }

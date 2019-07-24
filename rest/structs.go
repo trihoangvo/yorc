@@ -20,9 +20,10 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/ystia/yorc/v3/prov/hostspool"
-	"github.com/ystia/yorc/v3/registry"
-	"github.com/ystia/yorc/v3/tosca"
+	"github.com/ystia/yorc/v4/deployments/store"
+	"github.com/ystia/yorc/v4/prov/hostspool"
+	"github.com/ystia/yorc/v4/registry"
+	"github.com/ystia/yorc/v4/tosca"
 )
 
 const (
@@ -166,9 +167,21 @@ type Attribute struct {
 // CustomCommandRequest is the representation of a request to process a Custom Command
 type CustomCommandRequest struct {
 	NodeName          string                            `json:"node"`
+	Instances         []string                          `json:"instances"`
 	CustomCommandName string                            `json:"name"`
 	InterfaceName     string                            `json:"interface,omitempty"`
 	Inputs            map[string]*tosca.ValueAssignment `json:"inputs"`
+}
+
+// NodeInstances represents a given node's instances selected for a custom execution
+type NodeInstances struct {
+	NodeName  string   `json:"name"`
+	Instances []string `json:"instances"`
+}
+
+// WorkflowRequest allows to provide instances selection for nodes in a workflow
+type WorkflowRequest struct {
+	NodesInstances []NodeInstances `json:"nodesinstances"`
 }
 
 // WorkflowsCollection is a collection of workflows links
@@ -268,7 +281,7 @@ type RegistryImplementationsCollection struct {
 
 // RegistryDefinitionsCollection is the collection of TOSCA Definitions registered in the Yorc registry
 type RegistryDefinitionsCollection struct {
-	Definitions []registry.Definition `json:"definitions"`
+	Definitions []store.Definition `json:"definitions"`
 }
 
 // RegistryVaultsCollection is the collection of Vaults Clients Builders registered in the Yorc registry

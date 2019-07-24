@@ -26,10 +26,10 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/deployments"
-	"github.com/ystia/yorc/v3/events"
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
+	"github.com/ystia/yorc/v4/deployments"
+	"github.com/ystia/yorc/v4/events"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
 )
 
 type anotherLivingTaskAlreadyExistsError struct {
@@ -37,6 +37,12 @@ type anotherLivingTaskAlreadyExistsError struct {
 	targetID string
 	status   string
 }
+
+const (
+	// stepRegistrationInProgressKey is the Consul key name, whose presence means the
+	// new steps are being registered in Consul for a given task
+	stepRegistrationInProgressKey = "stepRegistrationInProgress"
+)
 
 func (e anotherLivingTaskAlreadyExistsError) Error() string {
 	return fmt.Sprintf("Task with id %q and status %q already exists for target %q", e.taskID, e.status, e.targetID)
@@ -59,7 +65,12 @@ func IsAnotherLivingTaskAlreadyExistsError(err error) (bool, string) {
 
 // IsWorkflowTask returns true if the task type is related to workflow
 func IsWorkflowTask(taskType TaskType) bool {
-	return taskType == TaskTypeDeploy || taskType == TaskTypeUnDeploy || taskType == TaskTypePurge || taskType == TaskTypeScaleIn || taskType == TaskTypeScaleOut || taskType == TaskTypeCustomWorkflow
+	switch taskType {
+	case TaskTypeDeploy, TaskTypeUnDeploy, TaskTypePurge, TaskTypeScaleIn, TaskTypeScaleOut, TaskTypeCustomWorkflow, TaskTypeAddNodes, TaskTypeRemoveNodes:
+		return true
+	default:
+		return false
+	}
 }
 
 type taskDataNotFound struct {
@@ -67,14 +78,29 @@ type taskDataNotFound struct {
 	taskID string
 }
 
+type taskNotFound struct {
+	taskID string
+}
+
 func (t taskDataNotFound) Error() string {
 	return fmt.Sprintf("Data %q not found for task %q", t.name, t.taskID)
+}
+
+func (t taskNotFound) Error() string {
+	return fmt.Sprintf("Task %q not found", t.taskID)
 }
 
 // IsTaskDataNotFoundError checks if an error is a task data not found error
 func IsTaskDataNotFoundError(err error) bool {
 	cause := errors.Cause(err)
 	_, ok := cause.(taskDataNotFound)
+	return ok
+}
+
+// IsTaskNotFoundError checks if an error is a task not found error
+func IsTaskNotFoundError(err error) bool {
+	cause := errors.Cause(err)
+	_, ok := cause.(taskNotFound)
 	return ok
 }
 
@@ -118,7 +144,15 @@ func GetTaskStatus(kv *api.KV, taskID string) (TaskStatus, error) {
 		return TaskStatusFAILED, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 	}
 	if kvp == nil || len(kvp.Value) == 0 {
-		return TaskStatusFAILED, errors.Errorf("Missing status for task with id %q", taskID)
+		// Check if task exists to return specific error
+		ok, err := TaskExists(kv, taskID)
+		if err != nil {
+			return TaskStatusFAILED, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+		}
+		if ok {
+			return TaskStatusFAILED, errors.Errorf("Missing status for task with id %q", taskID)
+		}
+		return TaskStatusFAILED, errors.WithStack(taskNotFound{taskID: taskID})
 	}
 	statusInt, err := strconv.Atoi(string(kvp.Value))
 	if err != nil {
@@ -143,7 +177,7 @@ func GetTaskType(kv *api.KV, taskID string) (TaskType, error) {
 	if err != nil {
 		return TaskTypeDeploy, errors.Wrapf(err, "Invalid task type:")
 	}
-	if typeInt < 0 || typeInt > int(TaskTypeForcePurge) {
+	if typeInt < 0 || typeInt > int(TaskTypeRemoveNodes) {
 		return TaskTypeDeploy, errors.Errorf("Invalid type for task with id %q: %q", taskID, string(kvp.Value))
 	}
 	return TaskType(typeInt), nil
@@ -190,16 +224,40 @@ func TaskExists(kv *api.KV, taskID string) (bool, error) {
 	return true, nil
 }
 
+// IsStepRegistrationInProgress checks if a task registration is still in progress,
+// in which case it should not yet be executed
+func IsStepRegistrationInProgress(kv *api.KV, taskID string) (bool, error) {
+	kvp, _, err := kv.Get(path.Join(consulutil.TasksPrefix, taskID, stepRegistrationInProgressKey), nil)
+	if err != nil {
+		return false, errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+	}
+	if kvp == nil || len(kvp.Value) == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
+// StoreOperations stores operations related to a task through a transaction
+// splitting this transaction if needed, in which case it will create a key
+// notifying a registration is in progress
+func StoreOperations(kv *api.KV, taskID string, operations api.KVTxnOps) error {
+
+	registrationStatusKeyPath := path.Join(consulutil.TasksPrefix, taskID, stepRegistrationInProgressKey)
+	preOpSplit := &api.KVTxnOp{
+		Verb:  api.KVSet,
+		Key:   registrationStatusKeyPath,
+		Value: []byte("true"),
+	}
+	postOpSplit := &api.KVTxnOp{
+		Verb: api.KVDelete,
+		Key:  registrationStatusKeyPath,
+	}
+	return consulutil.ExecuteSplittableTransaction(kv, operations, preOpSplit, postOpSplit)
+}
+
 // CancelTask marks a task as Canceled
 func CancelTask(kv *api.KV, taskID string) error {
 	return consulutil.StoreConsulKeyAsString(path.Join(consulutil.TasksPrefix, taskID, ".canceledFlag"), "true")
-}
-
-// ResumeTask marks a task as Initial to allow it being resumed
-//
-// Deprecated: use (c *collector.Collector) ResumeTask instead
-func ResumeTask(kv *api.KV, taskID string) error {
-	return consulutil.StoreConsulKeyAsString(path.Join(consulutil.TasksPrefix, taskID, "status"), strconv.Itoa(int(TaskStatusINITIAL)))
 }
 
 // DeleteTask allows to delete a stored task
@@ -230,7 +288,7 @@ func TargetHasLivingTasks(kv *api.KV, targetID string) (bool, string, string, er
 		}
 
 		switch tType {
-		case TaskTypeDeploy, TaskTypeUnDeploy, TaskTypePurge, TaskTypeScaleIn, TaskTypeScaleOut:
+		case TaskTypeDeploy, TaskTypeUnDeploy, TaskTypePurge, TaskTypeScaleIn, TaskTypeScaleOut, TaskTypeAddNodes, TaskTypeRemoveNodes:
 			if tStatus == TaskStatusINITIAL || tStatus == TaskStatusRUNNING {
 				return true, taskID, tStatus.String(), nil
 			}
@@ -325,13 +383,6 @@ func IsTaskRelatedNode(kv *api.KV, taskID, nodeName string) (bool, error) {
 	return kvp != nil, nil
 }
 
-// EmitTaskEvent emits a task event based on task type
-//
-// Deprecated: use EmitTaskEventWithContextualLogs instead
-func EmitTaskEvent(kv *api.KV, deploymentID, taskID string, taskType TaskType, status string) (string, error) {
-	return EmitTaskEventWithContextualLogs(nil, kv, deploymentID, taskID, taskType, "unknown", status)
-}
-
 // EmitTaskEventWithContextualLogs emits a task event based on task type
 func EmitTaskEventWithContextualLogs(ctx context.Context, kv *api.KV, deploymentID, taskID string, taskType TaskType, workflowName, status string) (string, error) {
 	if ctx == nil {
@@ -340,7 +391,7 @@ func EmitTaskEventWithContextualLogs(ctx context.Context, kv *api.KV, deployment
 	switch taskType {
 	case TaskTypeCustomCommand:
 		return events.PublishAndLogCustomCommandStatusChange(ctx, kv, deploymentID, taskID, strings.ToLower(status))
-	case TaskTypeCustomWorkflow, TaskTypeDeploy, TaskTypeUnDeploy, TaskTypePurge:
+	case TaskTypeCustomWorkflow, TaskTypeDeploy, TaskTypeUnDeploy, TaskTypePurge, TaskTypeAddNodes, TaskTypeRemoveNodes:
 		return events.PublishAndLogWorkflowStatusChange(ctx, kv, deploymentID, taskID, workflowName, strings.ToLower(status))
 	case TaskTypeScaleIn, TaskTypeScaleOut:
 		return events.PublishAndLogScalingStatusChange(ctx, kv, deploymentID, taskID, strings.ToLower(status))

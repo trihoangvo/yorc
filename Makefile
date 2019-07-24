@@ -33,7 +33,7 @@ TF_GOOGLE_PLUGIN_VERSION=$(shell grep "tf_google_plugin_version" versions.yaml |
 YORC_VERSION=$(shell grep "yorc_version" versions.yaml | awk '{print $$2}')
 
 # Should be updated when changing major version
-YORC_PACKAGE=github.com/ystia/yorc/v3
+YORC_PACKAGE=github.com/ystia/yorc/v4
 
 export GO111MODULE=on
 export BUILD_DIR=$(shell pwd)/build
@@ -82,9 +82,13 @@ ifndef SKIP_TESTS
 	@go test -tags "testing $(BUILD_TAGS)" $(TESTARGS) -p 1 ./...
 endif
 
+json-test: generate header format
+	@echo "--> Running go test with json output"
+# -count is for disabling test cache
+	@go test -tags "testing $(BUILD_TAGS)" $(TESTARGS) -json -count=1 -p 1 ./... > tests-reports.json
 
 cover:
-	@go test -tags "testing $(BUILD_TAGS)"  -p 1 -cover $(COVERARGS) ./...  
+	@go test -tags "testing $(BUILD_TAGS)"  -p 1 -cover $(COVERARGS) ./...
 
 format:
 	@echo "--> Running go fmt"
@@ -97,5 +101,6 @@ vet:
 tools:
 	@echo "--> Installing $(GOTOOLS)"
 	@go install $(GOTOOLS)
+
 
 .PHONY: build cov checks test cover format vet tools dist

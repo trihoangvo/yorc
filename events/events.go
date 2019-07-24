@@ -25,8 +25,8 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/pkg/errors"
 
-	"github.com/ystia/yorc/v3/helper/consulutil"
-	"github.com/ystia/yorc/v3/log"
+	"github.com/ystia/yorc/v4/helper/consulutil"
+	"github.com/ystia/yorc/v4/log"
 )
 
 // PublishAndLogAttributeValueChange publishes a value change for a given attribute instance of a given node and log this change into the log API
@@ -48,7 +48,7 @@ func PublishAndLogAttributeValueChange(ctx context.Context, deploymentID, nodeNa
 	if err != nil {
 		return "", err
 	}
-	WithContextOptionalFields(ctx).NewLogEntry(LogLevelINFO, deploymentID).Registerf("Attribute value for node %q, instance %q changed to %q", nodeName, instanceName, value)
+	WithContextOptionalFields(ctx).NewLogEntry(LogLevelINFO, deploymentID).Registerf("Attribute %q value for node %q, instance %q changed to %q", attributeName, nodeName, instanceName, value)
 	return id, nil
 }
 
@@ -62,15 +62,6 @@ func PublishAndLogMapAttributeValueChange(ctx context.Context, deploymentID, nod
 		}
 	}
 	return nil
-}
-
-// InstanceStatusChange publishes a status change for a given instance of a given node
-//
-// InstanceStatusChange returns the published event id
-//
-// Deprecated: Use PublishAndLogInstanceStatusChange instead
-func InstanceStatusChange(kv *api.KV, deploymentID, nodeName, instance, status string) (string, error) {
-	return PublishAndLogInstanceStatusChange(nil, kv, deploymentID, nodeName, instance, status)
 }
 
 // PublishAndLogInstanceStatusChange publishes a status change for a given instance of a given node and log this change into the log API
@@ -93,15 +84,6 @@ func PublishAndLogInstanceStatusChange(ctx context.Context, kv *api.KV, deployme
 	return id, nil
 }
 
-// DeploymentStatusChange publishes a status change for a given deployment
-//
-// DeploymentStatusChange returns the published event id
-//
-// Deprecated: use PublishAndLogDeploymentStatusChange instead
-func DeploymentStatusChange(kv *api.KV, deploymentID, status string) (string, error) {
-	return PublishAndLogDeploymentStatusChange(context.Background(), kv, deploymentID, status)
-}
-
 // PublishAndLogDeploymentStatusChange publishes a status change for a given deployment and log this change into the log API
 //
 // PublishAndLogDeploymentStatusChange returns the published event id
@@ -116,15 +98,6 @@ func PublishAndLogDeploymentStatusChange(ctx context.Context, kv *api.KV, deploy
 	}
 	WithContextOptionalFields(ctx).NewLogEntry(LogLevelINFO, deploymentID).Registerf("Status for deployment %q changed to %q", deploymentID, status)
 	return id, nil
-}
-
-// CustomCommandStatusChange publishes a status change for a custom command
-//
-// CustomCommandStatusChange returns the published event id
-//
-// Deprecated: use PublishAndLogCustomCommandStatusChange instead
-func CustomCommandStatusChange(kv *api.KV, deploymentID, taskID, status string) (string, error) {
-	return PublishAndLogCustomCommandStatusChange(nil, kv, deploymentID, taskID, status)
 }
 
 // PublishAndLogCustomCommandStatusChange publishes a status change for a custom command and log this change into the log API
@@ -148,15 +121,6 @@ func PublishAndLogCustomCommandStatusChange(ctx context.Context, kv *api.KV, dep
 	return id, nil
 }
 
-// ScalingStatusChange publishes a status change for a scaling task
-//
-// ScalingStatusChange returns the published event id
-//
-// Deprecated: use PublishAndLogScalingStatusChange instead
-func ScalingStatusChange(kv *api.KV, deploymentID, taskID, status string) (string, error) {
-	return PublishAndLogScalingStatusChange(nil, kv, deploymentID, taskID, status)
-}
-
 // PublishAndLogScalingStatusChange publishes a status change for a scaling task and log this change into the log API
 //
 // PublishAndLogScalingStatusChange returns the published event id
@@ -176,15 +140,6 @@ func PublishAndLogScalingStatusChange(ctx context.Context, kv *api.KV, deploymen
 	}
 	WithContextOptionalFields(ctx).NewLogEntry(LogLevelINFO, deploymentID).Registerf("Status for scaling task %q changed to %q", taskID, status)
 	return id, nil
-}
-
-// WorkflowStatusChange publishes a status change for a workflow task
-//
-// WorkflowStatusChange returns the published event id
-//
-// Deprecated: use PublishAndLogWorkflowStatusChange instead
-func WorkflowStatusChange(kv *api.KV, deploymentID, taskID, workflowName, status string) (string, error) {
-	return PublishAndLogWorkflowStatusChange(nil, kv, deploymentID, taskID, workflowName, status)
 }
 
 // PublishAndLogWorkflowStepStatusChange publishes a status change for a workflow step execution and log this change into the log API
@@ -347,6 +302,18 @@ func GetLogsEventsIndex(kv *api.KV, deploymentID string) (uint64, error) {
 		return 0, errors.New("Failed to retrieve last index for logs")
 	}
 	return qm.LastIndex, nil
+}
+
+// PurgeDeploymentEvents deletes all events for a given deployment
+func PurgeDeploymentEvents(kv *api.KV, deploymentID string) error {
+	_, err := kv.DeleteTree(path.Join(consulutil.EventsPrefix, deploymentID), nil)
+	return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
+}
+
+// PurgeDeploymentLogs deletes all logs for a given deployment
+func PurgeDeploymentLogs(kv *api.KV, deploymentID string) error {
+	_, err := kv.DeleteTree(path.Join(consulutil.LogsPrefix, deploymentID), nil)
+	return errors.Wrap(err, consulutil.ConsulGenericErrMsg)
 }
 
 func buildInfoFromContext(ctx context.Context) Info {
